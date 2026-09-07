@@ -1,12 +1,93 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { SiteConfig, CronScheduleConfig, CronRunLog } from '../types';
+import { SiteConfig, CronScheduleConfig, CronRunLog, CrawlingChannel } from '../types';
+
+export const DEFAULT_CRAWLING_CHANNELS: CrawlingChannel[] = [
+  {
+    id: 'chan_fb_atl_bhm',
+    name: 'Facebook (Atlanta & Birmingham Tango Communities)',
+    url: 'https://www.facebook.com/groups/tangobaratlanta',
+    sourceType: 'FACEBOOK',
+    city: 'Atlanta / Birmingham',
+    country_code: 'US',
+    description: 'Weekly milongas, practica updates, and festive weekend announcements from Greater Atlanta & Alabama.',
+    enabled: true,
+    lastCrawledAt: '2026-09-04T06:00:00Z',
+    discoveredCount: 8,
+  },
+  {
+    id: 'chan_tangopolix',
+    name: 'Tangopolix Global Tango Portal',
+    url: 'https://www.tangopolix.com',
+    sourceType: 'PORTAL',
+    city: 'Global',
+    country_code: 'ALL',
+    description: 'International directory of tango festivals, encuentros, marathons and workshops worldwide.',
+    enabled: true,
+    lastCrawledAt: '2026-09-04T06:00:00Z',
+    discoveredCount: 14,
+  },
+  {
+    id: 'chan_hoy_milonga',
+    name: 'Hoy Milonga & Info Buenos Aires Feed',
+    url: 'https://www.hoy-milonga.com',
+    sourceType: 'WEBSITE',
+    city: 'Buenos Aires & Worldwide',
+    country_code: 'AR',
+    description: 'Daily traditional and modern milongas in Buenos Aires and key partner metropolitan regions.',
+    enabled: true,
+    lastCrawledAt: '2026-09-04T06:00:00Z',
+    discoveredCount: 6,
+  },
+  {
+    id: 'chan_marathon_reg',
+    name: 'Global Tango Marathon & Encuentro Registry',
+    url: 'https://tangomarathons.com',
+    sourceType: 'CALENDAR',
+    city: 'Global',
+    country_code: 'ALL',
+    description: 'Role-balanced international tango marathons with registration open dates.',
+    enabled: true,
+    lastCrawledAt: '2026-09-04T06:00:00Z',
+    discoveredCount: 5,
+  },
+  {
+    id: 'chan_korea_daum_cafe',
+    name: 'Korea Tango Community & Milonga Club Directory',
+    url: 'https://cafe.daum.net/elbulin',
+    sourceType: 'COMMUNITY',
+    city: 'Seoul',
+    country_code: 'KR',
+    description: 'Seoul Hongdae & Gangnam milonga schedules, weekend specials, and party announcements.',
+    enabled: true,
+    lastCrawledAt: '2026-09-04T06:00:00Z',
+    discoveredCount: 7,
+  },
+  {
+    id: 'chan_japan_tokyo_tango',
+    name: 'Tokyo Argentine Tango Community & Milonga Guide',
+    url: 'https://www.facebook.com/groups/tangotokyo',
+    sourceType: 'COMMUNITY',
+    city: 'Tokyo',
+    country_code: 'JP',
+    description: 'Tokyo Ginza, Shibuya & Roppongi milongas, practica schedules, and weekend socials.',
+    enabled: true,
+    lastCrawledAt: '2026-09-04T06:00:00Z',
+    discoveredCount: 6,
+  },
+];
 
 interface SiteConfigContextType {
   siteConfig: SiteConfig;
   updateSiteConfig: (newConfig: Partial<SiteConfig>) => void;
   cronConfig: CronScheduleConfig;
   updateCronConfig: (newConfig: Partial<CronScheduleConfig>) => void;
-  addCronLog: (log: CronRunLog) => void;
+  addCronLog: (log: CronRunLog, updatedChannels?: CrawlingChannel[]) => void;
+  updateAllCrawlingChannels: (updatedChannels: CrawlingChannel[]) => void;
+  addCrawlingChannel: (channelData: Omit<CrawlingChannel, 'id' | 'lastCrawledAt' | 'discoveredCount' | 'addedAt'>) => CrawlingChannel;
+  updateCrawlingChannel: (id: string, updates: Partial<CrawlingChannel>) => void;
+  deleteCrawlingChannel: (id: string) => void;
+  toggleCrawlingChannel: (id: string) => void;
+  autoUpdateCuratedNotice: (noticeText: string) => void;
   callGeminiWebsiteManager: (
     prompt: string,
     action?: string,
@@ -22,6 +103,8 @@ const DEFAULT_SITE_CONFIG: SiteConfig = {
   curatedNotice: 'Seoul Tango Festival, Buenos Aires Spring Encuentro, and Rome Tango Marathon now listed.',
   lastUpdatedBy: 'parkinky (ADMIN)',
   lastUpdatedAt: new Date().toISOString(),
+  curatedNoticeLastAutoUpdated: new Date().toISOString(),
+  curatedNoticeAutoMode: true,
 };
 
 const DEFAULT_CRON_CONFIG: CronScheduleConfig = {
@@ -37,6 +120,7 @@ const DEFAULT_CRON_CONFIG: CronScheduleConfig = {
   },
   similarityThreshold: 0.7,
   autoApprove: true,
+  channels: DEFAULT_CRAWLING_CHANNELS,
   lastRunAt: '2026-09-04T06:00:00Z', // Past Friday 01:00 AM CDT (UTC-5)
   nextRunAt: '2026-09-11T06:00:00Z', // Upcoming Friday 01:00 AM CDT
   runHistory: [
@@ -87,7 +171,14 @@ export const SiteConfigProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const [cronConfig, setCronConfig] = useState<CronScheduleConfig>(() => {
     try {
       const saved = localStorage.getItem('everytango_cron_config');
-      return saved ? { ...DEFAULT_CRON_CONFIG, ...JSON.parse(saved) } : DEFAULT_CRON_CONFIG;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (!parsed.channels || !Array.isArray(parsed.channels) || parsed.channels.length === 0) {
+          parsed.channels = DEFAULT_CRAWLING_CHANNELS;
+        }
+        return { ...DEFAULT_CRON_CONFIG, ...parsed };
+      }
+      return DEFAULT_CRON_CONFIG;
     } catch {
       return DEFAULT_CRON_CONFIG;
     }
@@ -116,12 +207,108 @@ export const SiteConfigProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     });
   };
 
-  const addCronLog = (log: CronRunLog) => {
+  const addCronLog = (log: CronRunLog, updatedChannels?: CrawlingChannel[]) => {
     setCronConfig((prev) => {
+      const channelsToUse = updatedChannels || prev.channels || DEFAULT_CRAWLING_CHANNELS;
       const updated = {
         ...prev,
+        channels: channelsToUse,
         lastRunAt: log.timestamp,
         runHistory: [log, ...prev.runHistory.slice(0, 19)],
+      };
+      localStorage.setItem('everytango_cron_config', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const updateAllCrawlingChannels = (updatedChannels: CrawlingChannel[]) => {
+    setCronConfig((prev) => {
+      const updated: CronScheduleConfig = {
+        ...prev,
+        channels: updatedChannels,
+      };
+      localStorage.setItem('everytango_cron_config', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  // Add new crawling channel
+  const addCrawlingChannel = (
+    channelData: Omit<CrawlingChannel, 'id' | 'lastCrawledAt' | 'discoveredCount' | 'addedAt'>
+  ): CrawlingChannel => {
+    const newId = 'chan_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+    const newChannel: CrawlingChannel = {
+      ...channelData,
+      id: newId,
+      lastCrawledAt: null,
+      discoveredCount: 0,
+      addedAt: new Date().toISOString(),
+    };
+
+    setCronConfig((prev) => {
+      const existing = prev.channels || DEFAULT_CRAWLING_CHANNELS;
+      const updatedChannels = [...existing, newChannel];
+      const updated: CronScheduleConfig = {
+        ...prev,
+        channels: updatedChannels,
+      };
+      localStorage.setItem('everytango_cron_config', JSON.stringify(updated));
+      return updated;
+    });
+
+    return newChannel;
+  };
+
+  // Automatically update curated notice
+  const autoUpdateCuratedNotice = (noticeText: string) => {
+    setSiteConfig((prev) => {
+      const updated: SiteConfig = {
+        ...prev,
+        curatedNotice: noticeText,
+        curatedNoticeLastAutoUpdated: new Date().toISOString(),
+        lastUpdatedAt: new Date().toISOString(),
+      };
+      localStorage.setItem('everytango_site_config', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  // Update existing crawling channel
+  const updateCrawlingChannel = (id: string, updates: Partial<CrawlingChannel>) => {
+    setCronConfig((prev) => {
+      const existing = prev.channels || DEFAULT_CRAWLING_CHANNELS;
+      const updatedChannels = existing.map((c) => (c.id === id ? { ...c, ...updates } : c));
+      const updated: CronScheduleConfig = {
+        ...prev,
+        channels: updatedChannels,
+      };
+      localStorage.setItem('everytango_cron_config', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  // Delete crawling channel
+  const deleteCrawlingChannel = (id: string) => {
+    setCronConfig((prev) => {
+      const existing = prev.channels || DEFAULT_CRAWLING_CHANNELS;
+      const updatedChannels = existing.filter((c) => c.id !== id);
+      const updated: CronScheduleConfig = {
+        ...prev,
+        channels: updatedChannels,
+      };
+      localStorage.setItem('everytango_cron_config', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  // Toggle active status for crawling channel
+  const toggleCrawlingChannel = (id: string) => {
+    setCronConfig((prev) => {
+      const existing = prev.channels || DEFAULT_CRAWLING_CHANNELS;
+      const updatedChannels = existing.map((c) => (c.id === id ? { ...c, enabled: !c.enabled } : c));
+      const updated: CronScheduleConfig = {
+        ...prev,
+        channels: updatedChannels,
       };
       localStorage.setItem('everytango_cron_config', JSON.stringify(updated));
       return updated;
@@ -246,6 +433,12 @@ Click the "Apply to Live Site" button below to update the homepage banner and he
         cronConfig,
         updateCronConfig,
         addCronLog,
+        updateAllCrawlingChannels,
+        addCrawlingChannel,
+        updateCrawlingChannel,
+        deleteCrawlingChannel,
+        toggleCrawlingChannel,
+        autoUpdateCuratedNotice,
         callGeminiWebsiteManager,
       }}
     >

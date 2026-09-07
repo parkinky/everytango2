@@ -1279,5 +1279,43 @@ export const CRAWLER_FEED_CANDIDATES: TangoEvent[] = [
     submitted_by: null,
     created_at: "2026-09-06T00:00:00Z",
     notes: "Crawled from Atlanta Argentine Tango Community Facebook calendar. 3-day weekend festival with master classes."
+  },
+  {
+    id: "crawler_evt_tokyo_shibuya",
+    event_name: "Tokyo Shibuya Friday Night Milonga & Práctica",
+    event_type: "MILONGA",
+    start_date: "2026-10-16",
+    end_date: "2026-10-16",
+    city: "Tokyo",
+    state: "Tokyo",
+    country_code: "JP",
+    address: "Shibuya Cultural Center Owada, 23-21 Sakuragaokacho, Shibuya City",
+    price: "¥2,500",
+    is_free: false,
+    source_url: "https://facebook.com/groups/tangotokyo",
+    source_type: "AUTO_CRAWLED",
+    status: "APPROVED",
+    submitted_by: null,
+    created_at: "2026-09-06T02:00:00Z",
+    notes: "Popular weekly Tokyo social milonga with friendly welcome for traveling dancers."
+  },
+  {
+    id: "crawler_evt_tokyo_roppongi_grand",
+    event_name: "Tokyo Roppongi Grand Tango Encuentro & Workshop",
+    event_type: "ENCUENTRO",
+    start_date: "2026-11-20",
+    end_date: "2026-11-22",
+    city: "Tokyo",
+    state: "Tokyo",
+    country_code: "JP",
+    address: "Roppongi Academy Hills, 6-10-1 Roppongi, Minato City",
+    price: "¥5,000",
+    is_free: false,
+    source_url: "https://facebook.com/groups/tangotokyo",
+    source_type: "AUTO_CRAWLED",
+    status: "APPROVED",
+    submitted_by: null,
+    created_at: "2026-09-06T02:00:00Z",
+    notes: "3-day autumn international tango gathering in Minato City, Tokyo."
   }
 ];

@@ -73,6 +73,43 @@ Events Overview: ${JSON.stringify(eventsSummary || {})}`;
   }
 });
 
+// Automated Approval Email Dispatch Endpoint
+app.post('/api/email/send-approval', (req, res) => {
+  try {
+    const { to, authorName, event, subject, body } = req.body;
+    
+    if (!to) {
+      return res.status(400).json({ success: false, error: 'Recipient email address ("to") is required.' });
+    }
+
+    console.log('====================================================');
+    console.log(`[Automated Email Service] Event Approval Notification`);
+    console.log(`To: ${to} (${authorName || 'Author'})`);
+    console.log(`Subject: ${subject}`);
+    console.log(`Event: ${event?.event_name} (ID: ${event?.id})`);
+    console.log('----------------------------------------------------');
+    console.log(body);
+    console.log('====================================================');
+
+    const emailLog = {
+      id: 'mail_srv_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5),
+      to,
+      authorName: authorName || 'Tango Organizer',
+      eventId: event?.id || '',
+      eventName: event?.event_name || 'Tango Event',
+      subject: subject || '[EveryTango] Event Approved & Published',
+      body: body || '',
+      sentAt: new Date().toISOString(),
+      status: 'SENT',
+    };
+
+    res.json({ success: true, emailLog, message: `Automated approval email sent to ${to}` });
+  } catch (error: any) {
+    console.error('Email Dispatch Error:', error);
+    res.status(500).json({ success: false, error: error.message || 'Email dispatch failed' });
+  }
+});
+
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

@@ -15,7 +15,8 @@ import {
   Plus, 
   CheckCircle2, 
   RefreshCw,
-  Facebook
+  Facebook,
+  Clock
 } from 'lucide-react';
 import { SupportedLanguage, TangoEvent, EventType } from '../types';
 import { translations } from '../i18n';
@@ -776,6 +777,11 @@ export const FacebookSearchModal: React.FC<FacebookSearchModalProps> = ({
                           <span className="flex items-center gap-1 font-semibold text-emerald-600 dark:text-emerald-400">
                             <DollarSign className="w-3.5 h-3.5" />
                             {ev.price}
+                          </span>
+
+                          <span className="flex items-center gap-1 font-mono text-[11px] text-stone-500 dark:text-stone-400" title="검색된 일자">
+                            <Clock className="w-3 h-3 text-indigo-500" />
+                            <span>검색일: {ev.created_at ? ev.created_at.substring(0, 10) : new Date().toISOString().substring(0, 10)}</span>
                           </span>
                         </div>
 

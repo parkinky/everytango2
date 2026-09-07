@@ -8,7 +8,7 @@ import { convertPriceToUSD, formatTwoLineAddress } from './formatters';
 export function exportEventsToExcel(events: TangoEvent[], customFileName?: string): boolean {
   try {
     const rows = events.map((ev, index) => {
-      const usdInfo = convertPriceToUSD(ev.price, ev.is_free);
+      const usdInfo = convertPriceToUSD(ev.price, ev.is_free, ev.country_code);
       const addrInfo = formatTwoLineAddress(ev);
 
       return {
@@ -23,7 +23,7 @@ export function exportEventsToExcel(events: TangoEvent[], customFileName?: strin
         'Address': ev.address,
         'Location': addrInfo.locationLine,
         'Price (USD)': usdInfo.usdFormatted,
-        'Original Price': ev.price,
+        'Original Price': usdInfo.originalFormatted || ev.price,
         'Free': ev.is_free ? 'Yes' : 'No',
         'Source URL': ev.source_url,
         'Source Type': ev.source_type === 'AUTO_CRAWLED' ? 'Auto Crawled' : 'Manual',
@@ -97,7 +97,7 @@ export function exportEventsToCSV(events: TangoEvent[], customFileName?: string)
     ];
 
     const rows = events.map((ev, idx) => {
-      const usd = convertPriceToUSD(ev.price, ev.is_free);
+      const usd = convertPriceToUSD(ev.price, ev.is_free, ev.country_code);
       return [
         idx + 1,
         `"${(ev.event_name || '').replace(/"/g, '""')}"`,
@@ -109,7 +109,7 @@ export function exportEventsToCSV(events: TangoEvent[], customFileName?: string)
         `"${(ev.state || '').replace(/"/g, '""')}"`,
         `"${(ev.address || '').replace(/"/g, '""')}"`,
         `"${usd.usdFormatted}"`,
-        `"${(ev.price || '').replace(/"/g, '""')}"`,
+        `"${(usd.originalFormatted || ev.price || '').replace(/"/g, '""')}"`,
         `"${(ev.source_url || '').replace(/"/g, '""')}"`,
         `"${(ev.notes || '').replace(/"/g, '""')}"`
       ].join(',');

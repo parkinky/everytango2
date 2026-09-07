@@ -755,30 +755,7 @@ export function parseFacebookPostText(rawText: string, defaultCity: string = 'Se
     endDate = `${currentYear}-${m}-${d}`;
   }
 
-  // 4. Extract Price
-  let price = '₩15,000';
-  let isFree = false;
-  if (lowerText.includes('free') || lowerText.includes('무료') || lowerText.includes('gratis')) {
-    price = 'Free';
-    isFree = true;
-  } else {
-    const wonMatch = text.match(/(\d{1,3}(?:,\d{3})*)\s*원/);
-    if (wonMatch) {
-      price = `₩${wonMatch[1]}`;
-    } else {
-      const dollarMatch = text.match(/\$\s*(\d{1,3})/);
-      if (dollarMatch) {
-        price = `$${dollarMatch[1]}`;
-      } else {
-        const euroMatch = text.match(/€\s*(\d{1,3})|(\d{1,3})\s*€/);
-        if (euroMatch) {
-          price = `€${euroMatch[1] || euroMatch[2]}`;
-        }
-      }
-    }
-  }
-
-  // 5. Extract Location / Address
+  // 4. Extract Location / Address
   let address = 'Hongdae Tango Studio, Mapo-gu';
   let city = defaultCity;
   let countryCode = defaultCountry;
@@ -792,6 +769,18 @@ export function parseFacebookPostText(rawText: string, defaultCity: string = 'Se
     city = 'Busan';
     countryCode = 'KR';
     address = '부산 해운대구 달맞이길';
+  } else if (lowerText.includes('tokyo') || lowerText.includes('도쿄') || text.includes('東京') || lowerText.includes('ginza') || lowerText.includes('shibuya')) {
+    city = 'Tokyo';
+    countryCode = 'JP';
+    address = 'Ginza Hall, 6-10-1 Ginza, Chuo City, Tokyo';
+  } else if (lowerText.includes('osaka') || lowerText.includes('오사카') || text.includes('大阪')) {
+    city = 'Osaka';
+    countryCode = 'JP';
+    address = 'Umeda Tango Salon, Kita-ku, Osaka';
+  } else if (lowerText.includes('kyoto') || lowerText.includes('교토') || text.includes('京都')) {
+    city = 'Kyoto';
+    countryCode = 'JP';
+    address = 'Kyoto Gion Tango Studio, Higashiyama Ward, Kyoto';
   } else if (lowerText.includes('atlanta') || lowerText.includes('peachtree')) {
     city = 'Atlanta';
     countryCode = 'US';
@@ -814,6 +803,36 @@ export function parseFacebookPostText(rawText: string, defaultCity: string = 'Se
   const venueMatch = text.match(/(?:장소|위치|Location|Venue|Address)\s*[:：]\s*([^\n]+)/i);
   if (venueMatch && venueMatch[1]) {
     address = venueMatch[1].trim();
+  }
+
+  // 5. Extract Price
+  let price = countryCode === 'JP' ? '¥2,500' : (countryCode === 'KR' ? '₩15,000' : (countryCode === 'US' ? '$15' : '€15'));
+  let isFree = false;
+  if (lowerText.includes('free') || lowerText.includes('무료') || lowerText.includes('gratis')) {
+    price = 'Free';
+    isFree = true;
+  } else {
+    // Japanese Yen detection (e.g. ¥2,500, ￥3000, 2500円, 3000 yen)
+    const yenMatch = text.match(/(?:¥|￥)\s*(\d{1,3}(?:,\d{3})*)|(\d{1,3}(?:,\d{3})*)\s*(?:円|yen|jpy)/i);
+    if (yenMatch) {
+      const amount = yenMatch[1] || yenMatch[2];
+      price = `¥${amount}`;
+    } else {
+      const wonMatch = text.match(/(\d{1,3}(?:,\d{3})*)\s*원/);
+      if (wonMatch) {
+        price = `₩${wonMatch[1]}`;
+      } else {
+        const dollarMatch = text.match(/\$\s*(\d{1,3})/);
+        if (dollarMatch) {
+          price = `$${dollarMatch[1]}`;
+        } else {
+          const euroMatch = text.match(/€\s*(\d{1,3})|(\d{1,3})\s*€/);
+          if (euroMatch) {
+            price = `€${euroMatch[1] || euroMatch[2]}`;
+          }
+        }
+      }
+    }
   }
 
   // Extract Facebook link if present

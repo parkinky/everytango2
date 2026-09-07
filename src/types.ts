@@ -1,6 +1,6 @@
 export type UserRole = 'USER' | 'ADMIN';
 
-export type EventType = 'FESTIVAL' | 'MARATHON' | 'ENCUENTRO' | 'MILONGA';
+export type EventType = 'FESTIVAL' | 'MARATHON' | 'ENCUENTRO' | 'WORKSHOP' | 'MILONGA';
 
 export type EventStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 
@@ -16,7 +16,10 @@ export interface UserProfile {
   id: string; // uid
   username: string;
   email: string;
+  first_name?: string;
+  last_name?: string;
   country_code: string;
+  state?: string;
   city: string;
   phone: string;
   role: UserRole;
@@ -32,8 +35,11 @@ export interface SiteConfig {
   heroHeadline: string;
   heroSubheadline: string;
   curatedNotice: string;
+  heroBackgroundImage?: string; // Custom uploaded background photo
   lastUpdatedBy: string;
   lastUpdatedAt: string;
+  curatedNoticeLastAutoUpdated?: string;
+  curatedNoticeAutoMode?: boolean;
 }
 
 export interface CronRunLog {
@@ -47,6 +53,21 @@ export interface CronRunLog {
   message: string;
 }
 
+export interface CrawlingChannel {
+  id: string;
+  name: string;
+  url: string;
+  sourceType: 'FACEBOOK' | 'PORTAL' | 'CALENDAR' | 'WEBSITE' | 'COMMUNITY' | 'INSTAGRAM' | 'OTHER';
+  city?: string;
+  state?: string;
+  country_code?: string;
+  description?: string;
+  enabled: boolean;
+  lastCrawledAt?: string | null;
+  discoveredCount?: number;
+  addedAt?: string;
+}
+
 export interface CronScheduleConfig {
   enabled: boolean;
   frequencyPreset: 'weekly_fri_0100' | 'weekly_mon' | 'daily_0200' | 'daily_0400' | 'every_6h' | 'every_12h' | 'custom';
@@ -57,7 +78,9 @@ export interface CronScheduleConfig {
     facebook: boolean;
     milongasInfo: boolean;
     marathonRegistry: boolean;
+    [key: string]: boolean;
   };
+  channels?: CrawlingChannel[];
   similarityThreshold: number;
   autoApprove: boolean;
   lastRunAt: string | null;
@@ -82,6 +105,7 @@ export interface TangoEvent {
   status: EventStatus;
   submitted_by?: string | null;
   submitted_by_name?: string | null;
+  submitted_by_email?: string | null;
   created_at: string;
   notes?: string;
   similarity_hash?: string; // used for auto deduplication

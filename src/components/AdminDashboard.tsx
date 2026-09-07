@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   ShieldCheck, 
   Bot, 
@@ -26,22 +26,35 @@ import {
   Sliders,
   CheckCircle2,
   AlertCircle,
-  FileSpreadsheet
+  FileSpreadsheet,
+  LogOut,
+  ArrowLeft,
+  Edit3,
+  Globe,
+  Radio,
+  ArrowUpDown,
+  Play,
+  Camera,
+  Copy,
+  EyeOff,
+  Mail
 } from 'lucide-react';
-import { SupportedLanguage, TangoEvent, UserProfile, UserRole, EventType, EventStatus } from '../types';
+import { SupportedLanguage, TangoEvent, UserProfile, UserRole, EventType, EventStatus, CrawlingChannel } from '../types';
 import { translations } from '../i18n';
 import { useEvents } from '../context/EventsContext';
 import { useAuth } from '../context/AuthContext';
 import { useSiteConfig } from '../context/SiteConfigContext';
 import { formatTwoLineDate } from '../utils/dedup';
-import { formatTwoLineAddress, convertPriceToUSD } from '../utils/formatters';
+import { formatTwoLineAddress, convertPriceToUSD, formatCrawledDate } from '../utils/formatters';
 import { exportEventsToExcel } from '../utils/excelExport';
 
 interface AdminDashboardProps {
   currentLang: SupportedLanguage;
+  onRequestExit?: () => void;
+  onEditEvent?: (eventId: string) => void;
 }
 
-export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) => {
+export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onRequestExit, onEditEvent }) => {
   const t = translations[currentLang];
   const { 
     events, 
@@ -57,9 +70,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
     userProfile, 
     currentUser, 
     loginCustom, 
+    loginWithGoogle,
     logout, 
     getAllUsers, 
     updateUserRole, 
+    updateUserProfile,
+    resetUserPasswordByAdmin,
     deleteUser 
   } = useAuth();
 
@@ -69,13 +85,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
     cronConfig, 
     updateCronConfig, 
     addCronLog, 
+    updateAllCrawlingChannels,
+    addCrawlingChannel,
+    updateCrawlingChannel,
+    deleteCrawlingChannel,
+    toggleCrawlingChannel,
+    autoUpdateCuratedNotice,
     callGeminiWebsiteManager 
   } = useSiteConfig();
 
   // Admin Authentication State
   const isAdmin = userProfile?.role === 'ADMIN' || currentUser?.email === 'parkinky@gmail.com' || userProfile?.username === 'parkinky';
-  const [adminIdInput, setAdminIdInput] = useState('parkinky');
-  const [adminPwInput, setAdminPwInput] = useState('admin');
+  const [adminIdInput, setAdminIdInput] = useState('');
+  const [adminPwInput, setAdminPwInput] = useState('');
   const [loginError, setLoginError] = useState('');
   const [loginLoading, setLoginLoading] = useState(false);
 
@@ -85,6 +107,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
   // --- EVENTS TAB STATE ---
   const [eventFilterStatus, setEventFilterStatus] = useState<'ALL' | 'PENDING' | 'APPROVED' | 'REJECTED'>('ALL');
   const [eventSearchQuery, setEventSearchQuery] = useState('');
+  const [adminEventSortField, setAdminEventSortField] = useState<'created_at' | 'start_date' | 'event_name'>('created_at');
+  const [adminEventSortAsc, setAdminEventSortAsc] = useState<boolean>(false);
   const [isAddEventModalOpen, setIsAddEventModalOpen] = useState(false);
   const [newEventForm, setNewEventForm] = useState({
     event_name: '',
@@ -105,7 +129,51 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
   const [userList, setUserList] = useState<UserProfile[]>([]);
   const [userSearchQuery, setUserSearchQuery] = useState('');
   const [selectedUserDetails, setSelectedUserDetails] = useState<UserProfile | null>(null);
+  const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
+  const [userEditForm, setUserEditForm] = useState({
+    username: '',
+    email: '',
+    phone: '',
+    country_code: '',
+    city: '',
+    role: 'USER' as UserRole,
+  });
   const [usersLoading, setUsersLoading] = useState(false);
+  const [userActionSaving, setUserActionSaving] = useState(false);
+
+  // User Edit Modal - Password Reset State
+  const [resetPasswordInput, setResetPasswordInput] = useState('');
+  const [showResetPassword, setShowResetPassword] = useState(false);
+  const [resetPwFeedback, setResetPwFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [isResettingPw, setIsResettingPw] = useState(false);
+  const [copiedPw, setCopiedPw] = useState(false);
+
+  // Generic Confirmation Dialog State (for all deletions and changes)
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    confirmText?: string;
+    cancelText?: string;
+    variant?: 'danger' | 'warning' | 'primary';
+    onConfirm: () => Promise<void> | void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    confirmText: 'Confirm',
+    cancelText: 'Cancel',
+    variant: 'danger',
+    onConfirm: () => {},
+  });
+
+  // Automated Approval Notification Email Modal State
+  const [approvalEmailSuccessModal, setApprovalEmailSuccessModal] = useState<{
+    isOpen: boolean;
+    eventName: string;
+    recipientEmail: string;
+    emailLog?: any;
+  } | null>(null);
 
   // --- CRON TAB STATE ---
   const [crawlerRunning, setCrawlerRunning] = useState(false);
@@ -113,14 +181,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
     addedCount: number;
     duplicateCount: number;
     duplicatesDetails: string[];
+    channelsCrawled?: string[];
+    timeWindow?: string;
+    updatedChannels?: CrawlingChannel[];
   } | null>(null);
 
-  // --- GEMINI TAB STATE ---
+  // --- CRAWLING CHANNELS STATE ---
+  const [isChannelModalOpen, setIsChannelModalOpen] = useState(false);
+  const [editingChannel, setEditingChannel] = useState<CrawlingChannel | null>(null);
+  const [channelSearchQuery, setChannelSearchQuery] = useState('');
+  const [channelForm, setChannelForm] = useState({
+    name: '',
+    url: '',
+    sourceType: 'WEBSITE' as CrawlingChannel['sourceType'],
+    city: '',
+    state: '',
+    country_code: 'US',
+    description: '',
+    enabled: true,
+  });
+
+  // --- GEMINI TAB & CURATED NOTICE AUTO STATE ---
   const [geminiPrompt, setGeminiPrompt] = useState('');
   const [geminiLoading, setGeminiLoading] = useState(false);
   const [geminiResponse, setGeminiResponse] = useState<string>('');
   const [geminiSuggestedConfig, setGeminiSuggestedConfig] = useState<any>(null);
   const [geminiStatusMessage, setGeminiStatusMessage] = useState<string>('');
+  const [curatedAutoUpdating, setCuratedAutoUpdating] = useState(false);
+  const [curatedUpdateSuccessMsg, setCuratedUpdateSuccessMsg] = useState('');
 
   // Load users when entering user management tab
   useEffect(() => {
@@ -157,6 +245,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
     }
   };
 
+  // Google Admin Login using saved Google credentials
+  const handleGoogleAdminLogin = async () => {
+    setLoginLoading(true);
+    setLoginError('');
+    try {
+      await loginWithGoogle();
+      loadAllUsers();
+    } catch (err: any) {
+      console.error('Google Admin Login error:', err);
+      setLoginError(err.message || 'Google authentication failed. Please try again.');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
   // Add Event Handler
   const handleCreateEventSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -165,8 +268,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
       return;
     }
 
+    const effectiveEndDate = newEventForm.end_date.trim() ? newEventForm.end_date.trim() : newEventForm.start_date.trim();
+
     const res = await addEventDirect({
       ...newEventForm,
+      end_date: effectiveEndDate,
       source_type: 'MANUAL',
       submitted_by: userProfile?.id || 'admin_parkinky',
       submitted_by_name: userProfile?.username || 'parkinky (ADMIN)',
@@ -194,11 +300,272 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
     }
   };
 
-  // Delete Event Handler
-  const handleDeleteEvent = async (id: string, name: string) => {
-    if (window.confirm(`Are you sure you want to delete "${name}"? This action cannot be undone.`)) {
-      await deleteEvent(id);
+  // Delete Event Handler (with popup confirmation)
+  const handleDeleteEvent = (id: string, name: string) => {
+    setConfirmModal({
+      isOpen: true,
+      title: '이벤트 삭제 확인 (Delete Event)',
+      message: `정말로 이벤트 "${name}"을(를) 영구 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.`,
+      confirmText: '삭제 (Delete)',
+      cancelText: '취소',
+      variant: 'danger',
+      onConfirm: async () => {
+        await deleteEvent(id);
+        setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+      },
+    });
+  };
+
+  // Open User Edit Modal
+  const handleOpenEditUser = (user: UserProfile) => {
+    setEditingUser(user);
+    setResetPasswordInput('');
+    setShowResetPassword(false);
+    setResetPwFeedback(null);
+    setIsResettingPw(false);
+    setCopiedPw(false);
+    setUserEditForm({
+      username: user.username,
+      email: user.email,
+      phone: user.phone || '',
+      country_code: user.country_code || 'KR',
+      city: user.city || '',
+      role: user.role,
+    });
+  };
+
+  // Generate random temporary password for admin to assign
+  const handleGenerateTempPassword = () => {
+    const chars = '23456789abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ!@#$';
+    let newPw = 'Tango';
+    for (let i = 0; i < 4; i++) {
+      newPw += chars.charAt(Math.floor(Math.random() * chars.length));
     }
+    newPw += '!';
+    setResetPasswordInput(newPw);
+    setResetPwFeedback({
+      type: 'success',
+      message: `임시 비밀번호 "${newPw}"이(가) 생성되었습니다.`,
+    });
+  };
+
+  // Direct Password Reset Handler (Immediate with popup confirmation)
+  const handleDirectPasswordReset = () => {
+    if (!editingUser) return;
+    const targetPw = resetPasswordInput.trim();
+    if (!targetPw) {
+      setResetPwFeedback({
+        type: 'error',
+        message: '초기화할 새 비밀번호를 입력해주세요.',
+      });
+      return;
+    }
+
+    setConfirmModal({
+      isOpen: true,
+      title: '비밀번호 초기화 확인 (Confirm Password Reset)',
+      message: `사용자 "${editingUser.username}"의 비밀번호를 아래 값으로 초기화하시겠습니까?\n\n새 비밀번호: ${targetPw}\n\n초기화 즉시 데이터베이스에 반영되며, 해당 사용자는 이 비밀번호로 로그인해야 합니다.`,
+      confirmText: '비밀번호 초기화 실행 (Reset)',
+      cancelText: '취소',
+      variant: 'warning',
+      onConfirm: async () => {
+        setIsResettingPw(true);
+        const res = await resetUserPasswordByAdmin(editingUser.id, targetPw);
+        setIsResettingPw(false);
+        setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+        if (res.success) {
+          setResetPwFeedback({
+            type: 'success',
+            message: `비밀번호가 "${targetPw}"(으)로 성공적으로 초기화되었습니다!`,
+          });
+          await loadAllUsers();
+        } else {
+          setResetPwFeedback({
+            type: 'error',
+            message: res.error || '비밀번호 초기화에 실패했습니다.',
+          });
+        }
+      },
+    });
+  };
+
+  // Save User Edit Form (with popup confirmation)
+  const handleSaveUserEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingUser) return;
+
+    const trimmedPw = resetPasswordInput.trim();
+    let confirmMsg = `사용자 "${editingUser.username}"의 정보를 변경하시겠습니까?\n이메일: ${userEditForm.email}\n역할: ${userEditForm.role}\n국가/도시: ${userEditForm.country_code} / ${userEditForm.city}`;
+    if (trimmedPw) {
+      confirmMsg += `\n비밀번호: "${trimmedPw}" (새 비밀번호로 함께 초기화됨)`;
+    }
+
+    setConfirmModal({
+      isOpen: true,
+      title: '사용자 정보 변경 확인 (Confirm User Modification)',
+      message: confirmMsg,
+      confirmText: '변경 적용 (Save)',
+      cancelText: '취소',
+      variant: 'primary',
+      onConfirm: async () => {
+        setUserActionSaving(true);
+        const updates: Partial<UserProfile> = {
+          username: userEditForm.username.trim(),
+          email: userEditForm.email.trim(),
+          phone: userEditForm.phone.trim(),
+          country_code: userEditForm.country_code.trim().toUpperCase(),
+          city: userEditForm.city.trim(),
+          role: userEditForm.role,
+        };
+        if (trimmedPw) {
+          updates.password_hash = trimmedPw;
+        }
+        const res = await updateUserProfile(editingUser.id, updates);
+        if (trimmedPw) {
+          await resetUserPasswordByAdmin(editingUser.id, trimmedPw);
+        }
+        setUserActionSaving(false);
+        setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+        if (res.success) {
+          setEditingUser(null);
+          await loadAllUsers();
+        } else {
+          alert('사용자 정보 수정 실패: ' + (res.error || 'Unknown error'));
+        }
+      },
+    });
+  };
+
+  // Toggle User Role (with popup confirmation)
+  const handleToggleUserRole = (user: UserProfile) => {
+    const newRole: UserRole = user.role === 'ADMIN' ? 'USER' : 'ADMIN';
+    const actionLabel = newRole === 'ADMIN' ? '관리자(ADMIN)로 승격' : '일반 사용자(USER)로 강등';
+
+    setConfirmModal({
+      isOpen: true,
+      title: '사용자 권한 변경 확인 (Role Change)',
+      message: `"${user.username}" 사용자의 권한을 "${actionLabel}"하시겠습니까?`,
+      confirmText: `${actionLabel} 진행`,
+      cancelText: '취소',
+      variant: newRole === 'ADMIN' ? 'warning' : 'danger',
+      onConfirm: async () => {
+        await updateUserRole(user.id, newRole);
+        setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+        await loadAllUsers();
+      },
+    });
+  };
+
+  // Delete User (with popup confirmation)
+  const handleDeleteUser = (user: UserProfile) => {
+    setConfirmModal({
+      isOpen: true,
+      title: '사용자 영구 삭제 확인 (Delete User)',
+      message: `정말로 사용자 "${user.username}" (${user.email}) 계정을 영구 삭제하시겠습니까?\n이 계정과 연관된 프로필 데이터가 완전히 삭제되며 되돌릴 수 없습니다.`,
+      confirmText: '영구 삭제 (Delete)',
+      cancelText: '취소',
+      variant: 'danger',
+      onConfirm: async () => {
+        await deleteUser(user.id);
+        setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+        if (selectedUserDetails?.id === user.id) {
+          setSelectedUserDetails(null);
+        }
+        await loadAllUsers();
+      },
+    });
+  };
+
+  // --- CRAWLING CHANNEL HANDLERS ---
+  const handleOpenAddChannel = () => {
+    setEditingChannel(null);
+    setChannelForm({
+      name: '',
+      url: '',
+      sourceType: 'WEBSITE',
+      city: '',
+      state: '',
+      country_code: 'US',
+      description: '',
+      enabled: true,
+    });
+    setIsChannelModalOpen(true);
+  };
+
+  const handleOpenEditChannel = (channel: CrawlingChannel) => {
+    setEditingChannel(channel);
+    setChannelForm({
+      name: channel.name,
+      url: channel.url,
+      sourceType: channel.sourceType,
+      city: channel.city || '',
+      state: channel.state || '',
+      country_code: channel.country_code || 'US',
+      description: channel.description || '',
+      enabled: channel.enabled,
+    });
+    setIsChannelModalOpen(true);
+  };
+
+  const handleSaveChannel = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!channelForm.name.trim() || !channelForm.url.trim()) {
+      alert('채널 이름과 URL을 모두 입력해주세요.');
+      return;
+    }
+
+    if (editingChannel) {
+      setConfirmModal({
+        isOpen: true,
+        title: '크롤링 채널 수정 확인 (Confirm Channel Modification)',
+        message: `크롤링 대상 "${channelForm.name}"의 설정을 변경하시겠습니까?`,
+        confirmText: '변경 적용 (Save)',
+        cancelText: '취소',
+        variant: 'primary',
+        onConfirm: () => {
+          updateCrawlingChannel(editingChannel.id, {
+            name: channelForm.name.trim(),
+            url: channelForm.url.trim(),
+            sourceType: channelForm.sourceType,
+            city: channelForm.city.trim(),
+            state: channelForm.state.trim(),
+            country_code: channelForm.country_code.trim().toUpperCase(),
+            description: channelForm.description.trim(),
+            enabled: channelForm.enabled,
+          });
+          setIsChannelModalOpen(false);
+          setEditingChannel(null);
+          setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+        },
+      });
+    } else {
+      addCrawlingChannel({
+        name: channelForm.name.trim(),
+        url: channelForm.url.trim(),
+        sourceType: channelForm.sourceType,
+        city: channelForm.city.trim(),
+        state: channelForm.state.trim(),
+        country_code: channelForm.country_code.trim().toUpperCase(),
+        description: channelForm.description.trim(),
+        enabled: channelForm.enabled,
+      });
+      setIsChannelModalOpen(false);
+    }
+  };
+
+  const handleDeleteChannel = (channel: CrawlingChannel) => {
+    setConfirmModal({
+      isOpen: true,
+      title: '크롤링 채널 삭제 확인 (Delete Channel)',
+      message: `정말로 크롤링 대상 "${channel.name}"을(를) 삭제하시겠습니까?\n이 사이트는 향후 자동/수동 크롤링 대상에서 제외됩니다.`,
+      confirmText: '삭제 (Delete)',
+      cancelText: '취소',
+      variant: 'danger',
+      onConfirm: () => {
+        deleteCrawlingChannel(channel.id);
+        setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+      },
+    });
   };
 
   // Run Crawler Handler
@@ -207,8 +574,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
     setCrawlerResult(null);
     const startTime = Date.now();
     try {
-      const res = await runWeeklyCrawler();
+      const res = await runWeeklyCrawler(cronConfig.channels);
       setCrawlerResult(res);
+
+      // Immediately sync updated channels (with latest lastCrawledAt and discoveredCount) to state and storage
+      if (res.updatedChannels && res.updatedChannels.length > 0) {
+        updateAllCrawlingChannels(res.updatedChannels);
+      }
+
       addCronLog({
         id: 'cron_' + Date.now(),
         timestamp: new Date().toISOString(),
@@ -217,10 +590,62 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
         itemsAdded: res.addedCount,
         duplicatesBlocked: res.duplicateCount,
         durationMs: Date.now() - startTime,
-        message: `Manual crawl completed: ${res.addedCount} new events added, ${res.duplicateCount} duplicates blocked.`,
-      });
+        message: `Crawl completed (${res.channelsCrawled?.length || 0} channels, 1-week window): ${res.addedCount} events sent to Pending Approval list (승인대상 목록), ${res.duplicateCount} duplicates blocked.`,
+      }, res.updatedChannels);
+
+      // Auto-update Curated Notice automatically upon crawler completion
+      const approved = events.filter((e) => e.status === 'APPROVED');
+      const cities = Array.from(new Set(approved.map((e) => e.city).filter(Boolean))).slice(0, 4);
+      const cityStr = cities.length > 0 ? cities.join(', ') : 'Global Tango Hubs';
+      const autoCurated = `${cityStr} verified festivals & milongas updated live (${approved.length} upcoming events verified).`;
+      autoUpdateCuratedNotice(autoCurated);
     } finally {
       setCrawlerRunning(false);
+    }
+  };
+
+  // Trigger immediate automatic Curated Notice regeneration & sync
+  const handleTriggerCuratedAutoUpdate = async () => {
+    setCuratedAutoUpdating(true);
+    setCuratedUpdateSuccessMsg('');
+    try {
+      const approved = events.filter((e) => e.status === 'APPROVED');
+      const cities = Array.from(new Set(approved.map((e) => e.city).filter(Boolean))).slice(0, 5);
+      const topFestivals = approved
+        .filter((e) => e.event_type === 'FESTIVAL' || e.event_type === 'MARATHON')
+        .slice(0, 3)
+        .map((e) => e.event_name);
+
+      let generatedNotice = '';
+      if (topFestivals.length > 0) {
+        generatedNotice = `${topFestivals.join(', ')} & ${cities.slice(0, 3).join(', ')} tango updates live (${approved.length} verified events).`;
+      } else if (cities.length > 0) {
+        generatedNotice = `${cities.join(', ')} verified tango festivals, marathons, & milongas updated live (${approved.length} active events).`;
+      } else {
+        generatedNotice = 'Global tango festivals, marathons, and milongas updated weekly in real time.';
+      }
+
+      // Query Gemini AI for refined curation copy if online
+      try {
+        const geminiRes = await callGeminiWebsiteManager(
+          `Generate a one-sentence concise Curated Notice for homepage highlight banner based on these active cities: ${cities.join(', ')} and events count: ${approved.length}. Make it attractive, professional, under 120 characters in English or matching global tone.`,
+          'CURATE_NOTICE',
+          { cities, totalApproved: approved.length }
+        );
+        if (geminiRes.suggestedConfig?.curatedNotice) {
+          generatedNotice = geminiRes.suggestedConfig.curatedNotice;
+        } else if (geminiRes.reply && geminiRes.reply.length < 150 && !geminiRes.reply.includes('\n')) {
+          generatedNotice = geminiRes.reply.replace(/["*#]/g, '').trim();
+        }
+      } catch {
+        // use data-driven notice
+      }
+
+      autoUpdateCuratedNotice(generatedNotice);
+      setCuratedUpdateSuccessMsg('✓ Curated Notice가 최신 행사 데이터 및 AI에 의해 자동 업데이트되었습니다!');
+      setTimeout(() => setCuratedUpdateSuccessMsg(''), 4500);
+    } finally {
+      setCuratedAutoUpdating(false);
     }
   };
 
@@ -248,11 +673,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
     }
   };
 
-  // Apply Gemini suggested configuration to live site
+  // Apply Gemini suggested configuration to live site (Curated Notice ONLY - Top Announcement & Hero Headline are manual only)
   const handleApplyGeminiConfig = () => {
     if (geminiSuggestedConfig) {
-      updateSiteConfig(geminiSuggestedConfig);
-      setGeminiStatusMessage('Website configuration has been updated live! Homepage reflects new changes.');
+      if (geminiSuggestedConfig.curatedNotice) {
+        autoUpdateCuratedNotice(geminiSuggestedConfig.curatedNotice);
+        setGeminiStatusMessage('Curated Notice가 AI 추천으로 자동 업데이트되었습니다! (Top Announcement와 Main Hero Headline은 수동 관리 설정에 따라 보존되었습니다)');
+      } else {
+        setGeminiStatusMessage('제안된 내용에 자동 업데이트 대상인 Curated Notice가 포함되어 있지 않습니다.');
+      }
       setGeminiSuggestedConfig(null);
     }
   };
@@ -272,6 +701,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
     }
     return true;
   });
+
+  // Sort events for Admin Event Management tab
+  const sortedEventsForAdmin = useMemo(() => {
+    return [...filteredEventsForAdmin].sort((a, b) => {
+      let valA = '';
+      let valB = '';
+      if (adminEventSortField === 'created_at') {
+        valA = a.created_at || '';
+        valB = b.created_at || '';
+      } else if (adminEventSortField === 'start_date') {
+        valA = a.start_date || '';
+        valB = b.start_date || '';
+      } else {
+        valA = a.event_name.toLowerCase();
+        valB = b.event_name.toLowerCase();
+      }
+      if (valA < valB) return adminEventSortAsc ? -1 : 1;
+      if (valA > valB) return adminEventSortAsc ? 1 : -1;
+      return 0;
+    });
+  }, [filteredEventsForAdmin, adminEventSortField, adminEventSortAsc]);
 
   // Filter users for User Management tab
   const filteredUsers = userList.filter((u) => {
@@ -310,26 +760,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
           </div>
         )}
 
-        {/* 1-Click Fast Login for Parkinky */}
-        <div className="mb-6 p-4 rounded-xl bg-red-50/60 border border-red-100 space-y-2">
+        {/* Google Admin Authentication Section */}
+        <div className="mb-6 p-4 rounded-xl bg-gray-50 border border-gray-200 space-y-3">
           <div className="flex items-center justify-between text-xs">
-            <span className="font-bold text-red-700 flex items-center gap-1.5">
-              <KeyRound className="w-3.5 h-3.5" />
-              Default Credentials
+            <span className="font-bold text-gray-900 flex items-center gap-1.5">
+              <ShieldCheck className="w-4 h-4 text-red-600" />
+              Google Administrator Login
             </span>
-            <span className="text-[11px] font-mono text-red-600 bg-white px-2 py-0.5 rounded border border-red-200">
-              id: parkinky / pw: admin
+            <span className="text-[11px] text-gray-500 bg-white px-2 py-0.5 rounded border border-gray-200 font-medium">
+              Authorized Accounts
             </span>
           </div>
+          <p className="text-[11px] text-gray-500 leading-relaxed">
+            Sign in securely using your administrator Google credentials.
+          </p>
           <button
             type="button"
-            onClick={() => handleAdminLogin('parkinky', 'admin')}
+            id="google-admin-login-btn"
+            onClick={handleGoogleAdminLogin}
             disabled={loginLoading}
-            className="w-full py-2.5 px-4 rounded-lg bg-red-600 hover:bg-red-700 active:bg-red-800 text-white text-xs font-bold shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer"
+            className="w-full py-2.5 px-4 rounded-lg bg-white hover:bg-gray-100 active:bg-gray-200 text-gray-800 border border-gray-300 text-xs font-bold shadow-xs transition-colors flex items-center justify-center gap-2.5 cursor-pointer disabled:opacity-60"
           >
-            <Shield className="w-4 h-4" />
-            <span>{loginLoading ? 'Signing in...' : '⚡ Quick Admin Login (parkinky)'}</span>
+            <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+              <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"/>
+              <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.26v3.15C3.26 21.36 7.33 24 12 24z"/>
+              <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.26C.46 8.16 0 9.97 0 12s.46 3.84 1.26 5.42l4.02-3.15z"/>
+              <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.26 6.58l4.02 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/>
+            </svg>
+            <span>{loginLoading ? 'Authenticating with Google...' : 'Sign in with Google Account'}</span>
           </button>
+        </div>
+
+        <div className="relative flex items-center justify-center my-4">
+          <div className="border-t border-gray-200 w-full" />
+          <span className="bg-white px-3 text-[11px] text-gray-400 font-medium uppercase tracking-wider">or sign in with credentials</span>
         </div>
 
         {/* Manual Input Form */}
@@ -342,7 +806,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
               type="text"
               value={adminIdInput}
               onChange={(e) => setAdminIdInput(e.target.value)}
-              placeholder="parkinky"
+              placeholder="Enter admin ID"
+              autoComplete="username"
               required
               className="w-full px-3.5 py-2.5 text-sm bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:border-red-600 focus:bg-white text-gray-900"
             />
@@ -356,7 +821,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
               type="password"
               value={adminPwInput}
               onChange={(e) => setAdminPwInput(e.target.value)}
-              placeholder="admin"
+              placeholder="Enter password"
+              autoComplete="current-password"
               required
               className="w-full px-3.5 py-2.5 text-sm bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:border-red-600 focus:bg-white text-gray-900"
             />
@@ -365,10 +831,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
           <button
             type="submit"
             disabled={loginLoading}
-            className="w-full py-2.5 px-4 rounded-lg bg-gray-900 hover:bg-gray-800 text-white text-xs font-bold shadow-xs transition-colors"
+            className="w-full py-2.5 px-4 rounded-lg bg-gray-900 hover:bg-gray-800 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer"
           >
             {loginLoading ? 'Authenticating...' : 'Sign In as Admin'}
           </button>
+
+          {onRequestExit && (
+            <button
+              type="button"
+              onClick={onRequestExit}
+              className="w-full py-2 px-3 text-xs text-gray-500 hover:text-gray-900 hover:bg-gray-50 rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Exit Admin Dashboard (Return to Home)</span>
+            </button>
+          )}
         </form>
       </div>
     );
@@ -383,13 +860,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
       {/* Top Admin Header Bar */}
       <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2 mb-1.5">
+          <div className="flex flex-wrap items-center gap-2 mb-1.5">
             <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-red-50 text-red-600 text-xs font-bold border border-red-100">
               <ShieldCheck className="w-3.5 h-3.5" />
               <span>SUPER ADMIN CONSOLE</span>
             </span>
-            <span className="text-xs text-gray-500 font-mono">
-              Account: <strong className="text-gray-900">{userProfile?.username || 'parkinky'}</strong>
+            <span className="text-xs text-gray-700 font-mono bg-gray-50 px-2.5 py-0.5 rounded-md border border-gray-200">
+              ID: <strong className="text-gray-900">{userProfile?.username || 'parkinky'}</strong>
+            </span>
+            <span className="text-xs font-mono bg-emerald-50 text-emerald-800 px-2.5 py-0.5 rounded-md border border-emerald-200 flex items-center gap-1">
+              <Check className="w-3 h-3 text-emerald-600" />
+              <span>{currentUser?.email || userProfile?.email || 'parkinky@gmail.com'}</span>
             </span>
           </div>
           <h2 className="text-2xl sm:text-3xl font-extrabold text-gray-900 tracking-tight">
@@ -410,6 +891,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
             <Users className="w-4 h-4 text-blue-600" />
             <span>Users: <strong className="text-gray-900 font-bold">{userList.length}</strong></span>
           </div>
+          {onRequestExit && (
+            <button
+              onClick={onRequestExit}
+              className="px-3 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 border border-gray-200 text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1.5"
+              title="Exit Admin Dashboard"
+            >
+              <LogOut className="w-3.5 h-3.5 text-gray-600" />
+              <span>Exit Dashboard</span>
+            </button>
+          )}
           <button
             onClick={logout}
             className="px-3 py-2 rounded-lg bg-white hover:bg-gray-100 text-gray-600 border border-gray-200 text-xs font-semibold transition-colors cursor-pointer"
@@ -513,7 +1004,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
 
               {/* Export to Excel Button */}
               <button
-                onClick={() => exportEventsToExcel(filteredEventsForAdmin, 'EveryTango_Admin_Events.xlsx')}
+                onClick={() => exportEventsToExcel(sortedEventsForAdmin, 'EveryTango_Admin_Events.xlsx')}
                 className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors shrink-0 cursor-pointer"
                 title="Export filtered events to Excel"
               >
@@ -532,63 +1023,140 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
             </div>
           </div>
 
-          {/* Event Table (Single screen compact layout: Dates & Address formatted in 2 lines) */}
+          {/* Event Table (Single screen compact layout: Dates & Address formatted in 2 lines, table-fixed to eliminate horizontal scrolling) */}
           <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-xs">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs text-gray-700">
+            <div className="w-full overflow-hidden">
+              <table className="w-full table-fixed text-left text-xs text-gray-700 border-collapse">
                 <thead>
-                  <tr className="border-b border-gray-200 bg-gray-50/80 text-gray-600 uppercase font-semibold">
-                    <th className="py-2.5 px-3 whitespace-nowrap">Date</th>
-                    <th className="py-2.5 px-3">Type</th>
-                    <th className="py-2.5 px-4">Event Name</th>
-                    <th className="py-2.5 px-3">Location & Address</th>
-                    <th className="py-2.5 px-3">Price (USD)</th>
-                    <th className="py-2.5 px-3">Status</th>
-                    <th className="py-2.5 px-3">Source</th>
-                    <th className="py-2.5 px-3 text-right">Actions</th>
+                  <tr className="border-b border-gray-200 bg-gray-50/80 text-gray-600 uppercase font-semibold text-[11px]">
+                    <th 
+                      onClick={() => {
+                        if (adminEventSortField === 'start_date') {
+                          setAdminEventSortAsc(!adminEventSortAsc);
+                        } else {
+                          setAdminEventSortField('start_date');
+                          setAdminEventSortAsc(true);
+                        }
+                      }}
+                      className="w-[12%] py-2.5 px-2.5 cursor-pointer hover:text-gray-900 transition-colors select-none"
+                      title="행사일 기준 정렬"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>Date</span>
+                        {adminEventSortField === 'start_date' && (
+                          <span className="text-red-600 font-bold">{adminEventSortAsc ? '↑' : '↓'}</span>
+                        )}
+                      </div>
+                    </th>
+
+                    {/* 검색된 일자 컬럼 (Crawled / Discovered Date) */}
+                    <th 
+                      onClick={() => {
+                        if (adminEventSortField === 'created_at') {
+                          setAdminEventSortAsc(!adminEventSortAsc);
+                        } else {
+                          setAdminEventSortField('created_at');
+                          setAdminEventSortAsc(false);
+                        }
+                      }}
+                      className="w-[11%] py-2.5 px-2 cursor-pointer hover:text-gray-900 transition-colors select-none"
+                      title="검색된 일자 기준 정렬"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>검색된 일자</span>
+                        {adminEventSortField === 'created_at' ? (
+                          <span className="text-red-600 font-bold">{adminEventSortAsc ? '↑' : '↓'}</span>
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-gray-400" />
+                        )}
+                      </div>
+                    </th>
+
+                    <th className="w-[7%] py-2.5 px-1.5 text-center">Type</th>
+
+                    <th 
+                      onClick={() => {
+                        if (adminEventSortField === 'event_name') {
+                          setAdminEventSortAsc(!adminEventSortAsc);
+                        } else {
+                          setAdminEventSortField('event_name');
+                          setAdminEventSortAsc(true);
+                        }
+                      }}
+                      className="w-[24%] py-2.5 px-3 cursor-pointer hover:text-gray-900 transition-colors select-none"
+                      title="행사명 기준 정렬"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>Event Name</span>
+                        {adminEventSortField === 'event_name' && (
+                          <span className="text-red-600 font-bold">{adminEventSortAsc ? '↑' : '↓'}</span>
+                        )}
+                      </div>
+                    </th>
+
+                    <th className="w-[21%] py-2.5 px-2.5">Location & Address</th>
+                    <th className="w-[5%] py-2.5 px-1.5 text-right">Price</th>
+                    <th className="w-[7%] py-2.5 px-1.5 text-center">Status</th>
+                    <th className="w-[4%] py-2.5 px-1 text-center hidden sm:table-cell">Src</th>
+                    <th className="w-[9%] py-2.5 px-2 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {filteredEventsForAdmin.length === 0 ? (
+                  {sortedEventsForAdmin.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="py-8 text-center text-gray-400 text-xs">
+                      <td colSpan={9} className="py-8 text-center text-gray-400 text-xs">
                         No events found matching current criteria.
                       </td>
                     </tr>
                   ) : (
-                    filteredEventsForAdmin.map((ev) => {
+                    sortedEventsForAdmin.map((ev) => {
                       const { start, end } = formatTwoLineDate(ev.start_date, ev.end_date);
                       const addr = formatTwoLineAddress(ev);
-                      const usd = convertPriceToUSD(ev.price, ev.is_free);
+                      const usd = convertPriceToUSD(ev.price, ev.is_free, ev.country_code);
+                      const crawled = formatCrawledDate(ev.created_at);
 
                       return (
                         <tr key={ev.id} className="hover:bg-gray-50/80 transition-colors">
                           
                           {/* Date (2 Lines: Start date, ~ End date for compact single screen view) */}
-                          <td className="py-2.5 px-3 whitespace-nowrap font-medium">
+                          <td className="py-2.5 px-2.5 whitespace-nowrap font-medium align-middle">
                             <div className="flex flex-col font-mono text-xs leading-tight">
-                              <span className="text-gray-900 font-semibold">{start}</span>
-                              {end && <span className="text-gray-500 text-[11px]">{end}</span>}
+                              <span className="text-gray-900 font-semibold truncate">{start}</span>
+                              {end && <span className="text-gray-500 text-[10px] truncate">{end}</span>}
+                            </div>
+                          </td>
+
+                          {/* 검색된 일자 (Discovered / Crawled Date) */}
+                          <td className="py-2.5 px-2 whitespace-nowrap font-medium align-middle">
+                            <div className="flex flex-col font-mono text-[11px] leading-tight">
+                              <span className="text-gray-900 font-semibold truncate" title={crawled.date}>
+                                {crawled.date}
+                              </span>
+                              {crawled.time && (
+                                <span className="text-gray-500 text-[10px] truncate" title={crawled.time}>
+                                  {crawled.time}
+                                </span>
+                              )}
                             </div>
                           </td>
 
                           {/* Type */}
-                          <td className="py-2.5 px-3 whitespace-nowrap">
-                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-700 border border-gray-200">
+                          <td className="py-2.5 px-1.5 whitespace-nowrap text-center align-middle">
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-700 border border-gray-200">
                               {ev.event_type}
                             </span>
                           </td>
 
                           {/* Event Name & Link */}
-                          <td className="py-2.5 px-4 font-bold text-gray-900 max-w-xs truncate">
-                            <div className="flex items-center gap-1.5">
-                              <span title={ev.event_name}>{ev.event_name}</span>
+                          <td className="py-2.5 px-3 font-bold text-gray-900 align-middle">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className="truncate block" title={ev.event_name}>{ev.event_name}</span>
                               {ev.source_url && (
                                 <a
                                   href={ev.source_url}
                                   target="_blank"
                                   rel="noreferrer noopener"
-                                  className="text-gray-400 hover:text-red-600"
+                                  className="text-gray-400 hover:text-red-600 shrink-0"
                                   title="Open source URL"
                                 >
                                   <ExternalLink className="w-3 h-3" />
@@ -598,23 +1166,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
                           </td>
 
                           {/* Location & Address in 2 lines */}
-                          <td className="py-2.5 px-3 leading-tight max-w-xs">
-                            <div className="font-semibold text-gray-900 truncate">
+                          <td className="py-2.5 px-2.5 leading-tight align-middle">
+                            <div className="font-semibold text-gray-900 truncate" title={addr.locationLine}>
                               {addr.locationLine}
                             </div>
-                            <div className="text-[11px] text-gray-500 truncate" title={addr.venueLine}>
+                            <div className="text-[10px] text-gray-500 truncate" title={addr.venueLine}>
                               {addr.venueLine}
                             </div>
                           </td>
 
                           {/* Price in USD */}
-                          <td className="py-2.5 px-3 whitespace-nowrap font-semibold">
+                          <td className="py-2.5 px-2 whitespace-nowrap font-semibold text-right align-middle">
                             <div className="leading-tight">
                               <span className={`font-mono text-xs font-bold ${usd.isFree ? 'text-green-600' : 'text-gray-900'}`}>
                                 {usd.usdFormatted}
                               </span>
                               {usd.originalFormatted && usd.originalFormatted !== usd.usdFormatted && (
-                                <div className="text-[10px] text-gray-400 font-mono font-normal">
+                                <div className="text-[10px] text-gray-400 font-mono font-normal truncate" title={usd.originalFormatted}>
                                   ({usd.originalFormatted})
                                 </div>
                               )}
@@ -622,67 +1190,148 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
                           </td>
 
                           {/* Status */}
-                          <td className="py-2.5 px-3 whitespace-nowrap">
+                          <td className="py-2.5 px-1.5 whitespace-nowrap text-center align-middle">
                             {ev.status === 'APPROVED' && (
-                              <span className="px-2 py-0.5 rounded-full bg-green-50 text-green-700 text-[10px] font-bold border border-green-200">
+                              <span className="px-1.5 py-0.5 rounded-full bg-green-50 text-green-700 text-[10px] font-bold border border-green-200">
                                 APPROVED
                               </span>
                             )}
                             {ev.status === 'PENDING' && (
-                              <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 text-[10px] font-bold border border-amber-200">
+                              <span className="px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-800 text-[10px] font-bold border border-amber-200">
                                 PENDING
                               </span>
                             )}
                             {ev.status === 'REJECTED' && (
-                              <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[10px] font-bold border border-gray-200">
+                              <span className="px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[10px] font-bold border border-gray-200">
                                 REJECTED
                               </span>
                             )}
                           </td>
 
                           {/* Source */}
-                          <td className="py-2.5 px-3 whitespace-nowrap text-[11px] text-gray-500">
-                            {ev.source_type === 'AUTO_CRAWLED' ? '🤖 Auto Crawler' : '✍️ Manual'}
+                          <td className="py-2.5 px-1 text-center hidden sm:table-cell align-middle text-[11px]" title={ev.source_type === 'AUTO_CRAWLED' ? 'Auto Crawler' : 'Manual'}>
+                            {ev.source_type === 'AUTO_CRAWLED' ? '🤖' : '✍️'}
                           </td>
 
                           {/* Actions: Delete & Approve/Reject */}
-                          <td className="py-2.5 px-3 whitespace-nowrap text-right space-x-1.5">
-                            {ev.status === 'PENDING' && (
-                              <>
-                                <button
-                                  onClick={() => approveEvent(ev.id)}
-                                  className="px-2 py-1 rounded bg-green-600 hover:bg-green-700 text-white text-[11px] font-bold transition-colors cursor-pointer"
-                                  title="Approve and Publish"
-                                >
-                                  Approve
-                                </button>
-                                <button
-                                  onClick={() => rejectEvent(ev.id)}
-                                  className="px-2 py-1 rounded bg-gray-200 hover:bg-gray-300 text-gray-700 text-[11px] font-semibold transition-colors cursor-pointer"
-                                  title="Reject"
-                                >
-                                  Reject
-                                </button>
-                              </>
-                            )}
+                          <td className="py-2.5 px-2 whitespace-nowrap text-right align-middle">
+                            <div className="flex items-center justify-end gap-1">
+                              {ev.status === 'PENDING' && (
+                                <>
+                                  <button
+                                    onClick={() => {
+                                      const authorEmail = ev.submitted_by_email || (ev.submitted_by && ev.submitted_by.includes('@') ? ev.submitted_by : '');
+                                      setConfirmModal({
+                                        isOpen: true,
+                                        title: '이벤트 승인 및 게시 확인 (Approve Event)',
+                                        message: `"${ev.event_name}" 이벤트를 승인하고 공개 일정표에 즉시 게시하시겠습니까?${
+                                          authorEmail
+                                            ? `\n\n✉️ [자동 영문 회신 메일 발송 안내]\n승인 처리 완료 즉시 작성자(${authorEmail})에게 영문 승인 완료 및 즉시 게시 안내 회신 메일이 자동 발송됩니다.`
+                                            : '\n\n✉️ [자동 영문 회신 메일 발송 안내]\n승인 완료 즉시 작성자의 이메일로 영문 승인 완료 및 즉시 게시 안내 회신 메일이 자동 발송됩니다.'
+                                        }`,
+                                        confirmText: '승인 및 메일 발송',
+                                        cancelText: '취소',
+                                        variant: 'primary',
+                                        onConfirm: async () => {
+                                          const res = await approveEvent(ev.id);
+                                          setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+                                          if (res.emailSent) {
+                                            setApprovalEmailSuccessModal({
+                                              isOpen: true,
+                                              eventName: ev.event_name,
+                                              recipientEmail: res.emailRecipient || authorEmail || 'Author',
+                                              emailLog: res.emailLog,
+                                            });
+                                          }
+                                        },
+                                      });
+                                    }}
+                                    className="px-2 py-0.5 rounded bg-green-600 hover:bg-green-700 text-white text-[10px] font-bold transition-colors cursor-pointer inline-flex items-center gap-1"
+                                    title="Approve and Publish (Sends automated English reply email to author)"
+                                  >
+                                    <Mail className="w-2.5 h-2.5" />
+                                    <span>승인</span>
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setConfirmModal({
+                                        isOpen: true,
+                                        title: '이벤트 반려 확인 (Reject Event)',
+                                        message: `"${ev.event_name}" 이벤트를 등록 반려 처리하시겠습니까?`,
+                                        confirmText: '반려 처리',
+                                        cancelText: '취소',
+                                        variant: 'warning',
+                                        onConfirm: () => {
+                                          rejectEvent(ev.id);
+                                          setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+                                        },
+                                      });
+                                    }}
+                                    className="px-1.5 py-0.5 rounded bg-gray-200 hover:bg-gray-300 text-gray-700 text-[10px] font-semibold transition-colors cursor-pointer"
+                                    title="Reject"
+                                  >
+                                    반려
+                                  </button>
+                                </>
+                              )}
 
-                            {ev.status === 'REJECTED' && (
+                              {ev.status === 'REJECTED' && (
+                                <button
+                                  onClick={() => {
+                                    const authorEmail = ev.submitted_by_email || (ev.submitted_by && ev.submitted_by.includes('@') ? ev.submitted_by : '');
+                                    setConfirmModal({
+                                      isOpen: true,
+                                      title: '이벤트 재승인 확인 (Re-approve Event)',
+                                      message: `반려되었던 "${ev.event_name}" 이벤트를 다시 승인하여 공개 일정에 게시하시겠습니까?${
+                                        authorEmail
+                                          ? `\n\n✉️ [자동 영문 회신 메일 발송 안내]\n승인 처리 완료 즉시 작성자(${authorEmail})에게 영문 승인 완료 및 즉시 게시 안내 회신 메일이 자동 발송됩니다.`
+                                          : ''
+                                      }`,
+                                      confirmText: '재승인 및 게시',
+                                      cancelText: '취소',
+                                      variant: 'primary',
+                                      onConfirm: async () => {
+                                        const res = await approveEvent(ev.id);
+                                        setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+                                        if (res.emailSent) {
+                                          setApprovalEmailSuccessModal({
+                                            isOpen: true,
+                                            eventName: ev.event_name,
+                                            recipientEmail: res.emailRecipient || authorEmail || 'Author',
+                                            emailLog: res.emailLog,
+                                          });
+                                        }
+                                      },
+                                    });
+                                  }}
+                                  className="px-2 py-0.5 rounded bg-green-50 text-green-700 border border-green-200 hover:bg-green-100 text-[10px] font-bold cursor-pointer inline-flex items-center gap-1"
+                                  title="Re-approve and Publish"
+                                >
+                                  <Mail className="w-2.5 h-2.5" />
+                                  <span>재승인</span>
+                                </button>
+                              )}
+
+                              {/* Edit Event Content Button */}
+                              {onEditEvent && (
+                                <button
+                                  onClick={() => onEditEvent(ev.id)}
+                                  className="p-1 rounded-md hover:bg-blue-50 text-gray-400 hover:text-blue-600 transition-colors inline-block cursor-pointer"
+                                  title="Edit Event Content (이벤트 내용 편집)"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+
+                              {/* Delete Event Button */}
                               <button
-                                onClick={() => approveEvent(ev.id)}
-                                className="px-2 py-1 rounded bg-green-50 text-green-700 border border-green-200 hover:bg-green-100 text-[11px] font-bold cursor-pointer"
+                                onClick={() => handleDeleteEvent(ev.id, ev.event_name)}
+                                className="p-1 rounded-md hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors inline-block cursor-pointer"
+                                title="Delete Event"
                               >
-                                Re-approve
+                                <Trash2 className="w-3.5 h-3.5" />
                               </button>
-                            )}
-
-                            {/* Delete Event Button */}
-                            <button
-                              onClick={() => handleDeleteEvent(ev.id, ev.event_name)}
-                              className="p-1.5 rounded-md hover:bg-red-50 text-gray-400 hover:text-red-600 transition-colors inline-block cursor-pointer"
-                              title="Delete Event"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            </div>
                           </td>
 
                         </tr>
@@ -735,6 +1384,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
                         <option value="FESTIVAL">FESTIVAL</option>
                         <option value="MARATHON">MARATHON</option>
                         <option value="ENCUENTRO">ENCUENTRO</option>
+                        <option value="WORKSHOP">WORKSHOP</option>
                         <option value="MILONGA">MILONGA</option>
                       </select>
                     </div>
@@ -906,20 +1556,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
             </div>
           </div>
 
-          {/* User Table */}
+          {/* User Table (Single screen table-fixed layout without horizontal scroll) */}
           <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-xs">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs text-gray-700">
+            <div className="w-full overflow-hidden">
+              <table className="w-full table-fixed text-left text-xs text-gray-700 border-collapse">
                 <thead>
-                  <tr className="border-b border-gray-200 bg-gray-50/80 text-gray-600 uppercase font-semibold">
-                    <th className="py-2.5 px-3">UID</th>
-                    <th className="py-2.5 px-3">Username</th>
-                    <th className="py-2.5 px-3">Email</th>
-                    <th className="py-2.5 px-3">Phone</th>
-                    <th className="py-2.5 px-3">Country / City</th>
-                    <th className="py-2.5 px-3">Role</th>
-                    <th className="py-2.5 px-3">Joined Date</th>
-                    <th className="py-2.5 px-3 text-right">Actions</th>
+                  <tr className="border-b border-gray-200 bg-gray-50/80 text-gray-600 uppercase font-semibold text-[11px]">
+                    <th className="w-[10%] hidden md:table-cell py-2.5 px-2">UID</th>
+                    <th className="w-[18%] py-2.5 px-2.5">Username</th>
+                    <th className="w-[22%] py-2.5 px-2.5">Email</th>
+                    <th className="w-[12%] hidden sm:table-cell py-2.5 px-2">Phone</th>
+                    <th className="w-[14%] py-2.5 px-2.5">Country / City</th>
+                    <th className="w-[8%] py-2.5 px-1.5 text-center">Role</th>
+                    <th className="w-[9%] hidden lg:table-cell py-2.5 px-2 text-center">Joined</th>
+                    <th className="w-[17%] py-2.5 px-2 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -934,24 +1584,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
                       const isAdminRole = u.role === 'ADMIN' || u.username === 'parkinky';
                       return (
                         <tr key={u.id} className="hover:bg-gray-50/80 transition-colors">
-                          <td className="py-2.5 px-3 font-mono text-[11px] text-gray-500">{u.id}</td>
-                          <td className="py-2.5 px-3 font-bold text-gray-900 flex items-center gap-1.5">
-                            <span>{u.username}</span>
-                            {u.username === 'parkinky' && (
-                              <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 text-[10px] font-bold">
-                                MASTER
-                              </span>
-                            )}
+                          <td className="py-2.5 px-2 font-mono text-[10px] text-gray-500 hidden md:table-cell truncate align-middle" title={u.id}>
+                            {u.id}
                           </td>
-                          <td className="py-2.5 px-3 text-gray-600">{u.email}</td>
-                          <td className="py-2.5 px-3 font-mono text-gray-600">{u.phone || '—'}</td>
-                          <td className="py-2.5 px-3 text-gray-600">
-                            <span className="font-mono font-bold text-gray-800 mr-1">{u.country_code}</span>
-                            <span>{u.city}</span>
+                          <td className="py-2.5 px-2.5 font-bold text-gray-900 align-middle">
+                            <div className="flex items-center gap-1 min-w-0">
+                              <span className="truncate" title={u.username}>{u.username}</span>
+                              {u.username === 'parkinky' && (
+                                <span className="px-1 py-0.2 rounded bg-red-100 text-red-700 text-[9px] font-bold shrink-0">
+                                  MASTER
+                                </span>
+                              )}
+                            </div>
                           </td>
-                          <td className="py-2.5 px-3">
+                          <td className="py-2.5 px-2.5 text-gray-600 align-middle">
+                            <span className="truncate block" title={u.email}>{u.email}</span>
+                          </td>
+                          <td className="py-2.5 px-2 font-mono text-gray-600 hidden sm:table-cell align-middle">
+                            <span className="truncate block" title={u.phone || '—'}>{u.phone || '—'}</span>
+                          </td>
+                          <td className="py-2.5 px-2.5 text-gray-600 align-middle">
+                            <div className="truncate" title={`${u.country_code} ${u.city || ''}`}>
+                              <span className="font-mono font-bold text-gray-800 mr-1">{u.country_code}</span>
+                              <span>{u.city || '—'}</span>
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-1.5 text-center align-middle">
                             <span
-                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                              className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold border ${
                                 isAdminRole
                                   ? 'bg-red-50 text-red-700 border-red-200'
                                   : 'bg-blue-50 text-blue-700 border-blue-200'
@@ -960,42 +1620,49 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
                               {isAdminRole ? 'ADMIN' : 'USER'}
                             </span>
                           </td>
-                          <td className="py-2.5 px-3 text-[11px] text-gray-500">
+                          <td className="py-2.5 px-2 text-[11px] text-gray-500 hidden lg:table-cell text-center align-middle">
                             {u.created_at ? u.created_at.substring(0, 10) : '—'}
                           </td>
-                          <td className="py-2.5 px-3 text-right space-x-1.5">
-                            <button
-                              onClick={() => setSelectedUserDetails(u)}
-                              className="px-2 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 text-[11px] font-semibold cursor-pointer"
-                            >
-                              Details
-                            </button>
-                            {u.username !== 'parkinky' && (
+                          <td className="py-2.5 px-2 text-right whitespace-nowrap align-middle">
+                            <div className="flex items-center justify-end gap-1">
                               <button
-                                onClick={async () => {
-                                  const newRole: UserRole = u.role === 'ADMIN' ? 'USER' : 'ADMIN';
-                                  await updateUserRole(u.id, newRole);
-                                  loadAllUsers();
-                                }}
-                                className="px-2 py-1 rounded bg-blue-50 hover:bg-blue-100 text-blue-700 text-[11px] font-semibold border border-blue-200 cursor-pointer"
+                                onClick={() => setSelectedUserDetails(u)}
+                                className="px-1.5 py-0.5 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 text-[10px] font-semibold cursor-pointer"
+                                title="User Details"
                               >
-                                {u.role === 'ADMIN' ? 'Demote to USER' : 'Promote to ADMIN'}
+                                Details
                               </button>
-                            )}
-                            {u.username !== 'parkinky' && (
+
+                              {/* Edit User Information Button */}
                               <button
-                                onClick={async () => {
-                                  if (window.confirm(`Are you sure you want to permanently delete user "${u.username}"?`)) {
-                                    await deleteUser(u.id);
-                                    loadAllUsers();
-                                  }
-                                }}
-                                className="p-1 rounded text-gray-400 hover:text-red-600 cursor-pointer"
-                                title="Delete User"
+                                onClick={() => handleOpenEditUser(u)}
+                                className="px-1.5 py-0.5 rounded bg-amber-50 hover:bg-amber-100 text-amber-700 text-[10px] font-semibold border border-amber-200 inline-flex items-center gap-0.5 cursor-pointer"
+                                title="사용자 정보 수정 (Edit User Info)"
                               >
-                                <Trash2 className="w-3.5 h-3.5" />
+                                <Edit3 className="w-3 h-3" />
+                                <span>수정</span>
                               </button>
-                            )}
+
+                              {u.username !== 'parkinky' && (
+                                <button
+                                  onClick={() => handleToggleUserRole(u)}
+                                  className="px-1.5 py-0.5 rounded bg-blue-50 hover:bg-blue-100 text-blue-700 text-[10px] font-semibold border border-blue-200 cursor-pointer"
+                                  title={u.role === 'ADMIN' ? 'Demote to USER' : 'Promote to ADMIN'}
+                                >
+                                  {u.role === 'ADMIN' ? 'Demote' : 'Promote'}
+                                </button>
+                              )}
+
+                              {u.username !== 'parkinky' && (
+                                <button
+                                  onClick={() => handleDeleteUser(u)}
+                                  className="p-1 rounded text-gray-400 hover:text-red-600 transition-colors cursor-pointer inline-flex items-center"
+                                  title="Delete User (사용자 삭제)"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );
@@ -1034,6 +1701,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
                     <span className="font-semibold text-gray-600">Username:</span>
                     <span className="font-bold text-gray-900">{selectedUserDetails.username}</span>
                   </div>
+                  {(selectedUserDetails.first_name || selectedUserDetails.last_name) && (
+                    <div className="flex justify-between py-1 border-b border-gray-200">
+                      <span className="font-semibold text-gray-600">Full Name:</span>
+                      <span className="font-medium text-gray-900">
+                        {[selectedUserDetails.first_name, selectedUserDetails.last_name].filter(Boolean).join(' ')}
+                      </span>
+                    </div>
+                  )}
                   <div className="flex justify-between py-1 border-b border-gray-200">
                     <span className="font-semibold text-gray-600">Email:</span>
                     <span className="text-gray-900">{selectedUserDetails.email}</span>
@@ -1043,8 +1718,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
                     <span className="font-mono text-gray-900">{selectedUserDetails.phone || 'Not registered'}</span>
                   </div>
                   <div className="flex justify-between py-1 border-b border-gray-200">
-                    <span className="font-semibold text-gray-600">Country & City:</span>
-                    <span className="text-gray-900">{selectedUserDetails.country_code} — {selectedUserDetails.city}</span>
+                    <span className="font-semibold text-gray-600">Location:</span>
+                    <span className="text-gray-900">
+                      {[selectedUserDetails.city, selectedUserDetails.state, selectedUserDetails.country_code].filter(Boolean).join(', ')}
+                    </span>
                   </div>
                   <div className="flex justify-between py-1 border-b border-gray-200">
                     <span className="font-semibold text-gray-600">Access Role:</span>
@@ -1083,7 +1760,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
                   )}
                 </div>
 
-                <div className="pt-2 flex justify-end">
+                <div className="pt-2 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        const target = selectedUserDetails;
+                        setSelectedUserDetails(null);
+                        handleOpenEditUser(target);
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                      <span>정보 수정 (Edit)</span>
+                    </button>
+                    {selectedUserDetails.username !== 'parkinky' && (
+                      <button
+                        onClick={() => {
+                          const target = selectedUserDetails;
+                          handleDeleteUser(target);
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>삭제 (Delete)</span>
+                      </button>
+                    )}
+                  </div>
                   <button
                     onClick={() => setSelectedUserDetails(null)}
                     className="px-4 py-2 rounded-lg bg-gray-900 hover:bg-gray-800 text-white font-bold text-xs cursor-pointer"
@@ -1091,6 +1793,294 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
                     Close
                   </button>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* User Edit Modal */}
+          {editingUser && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
+              <div className="bg-white border border-gray-200 rounded-2xl p-6 max-w-lg w-full shadow-2xl space-y-4 text-xs text-gray-800 animate-in fade-in zoom-in-95 duration-150">
+                <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center">
+                      <Edit3 className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h3 className="font-extrabold text-base text-gray-900">
+                        사용자 정보 수정 (Edit User)
+                      </h3>
+                      <p className="text-[11px] text-gray-500 font-mono">UID: {editingUser.id}</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setEditingUser(null)}
+                    className="p-1.5 rounded-lg text-gray-400 hover:text-gray-900 hover:bg-gray-100 cursor-pointer transition-colors"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <form onSubmit={handleSaveUserEdit} className="space-y-3.5">
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">
+                      사용자명 (Username) *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={userEditForm.username}
+                      onChange={(e) => setUserEditForm({ ...userEditForm, username: e.target.value })}
+                      placeholder="e.g. TangoMaster"
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-amber-600 focus:outline-none transition-colors"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-gray-700 mb-1">
+                      이메일 주소 (Email Address) *
+                    </label>
+                    <input
+                      type="email"
+                      required
+                      value={userEditForm.email}
+                      onChange={(e) => setUserEditForm({ ...userEditForm, email: e.target.value })}
+                      placeholder="user@example.com"
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-amber-600 focus:outline-none transition-colors"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block font-bold text-gray-700 mb-1">
+                        전화번호 (Phone)
+                      </label>
+                      <input
+                        type="text"
+                        value={userEditForm.phone}
+                        onChange={(e) => setUserEditForm({ ...userEditForm, phone: e.target.value })}
+                        placeholder="e.g. 010-1234-5678"
+                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-amber-600 focus:outline-none transition-colors font-mono"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-bold text-gray-700 mb-1">
+                        권한 역할 (Role) *
+                      </label>
+                      <select
+                        value={userEditForm.role}
+                        onChange={(e) => setUserEditForm({ ...userEditForm, role: e.target.value as UserRole })}
+                        disabled={editingUser.username === 'parkinky'}
+                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-amber-600 focus:outline-none transition-colors font-semibold"
+                      >
+                        <option value="USER">USER (일반 사용자)</option>
+                        <option value="ADMIN">ADMIN (최고 관리자)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block font-bold text-gray-700 mb-1">
+                        국가 코드 (Country Code)
+                      </label>
+                      <input
+                        type="text"
+                        maxLength={2}
+                        value={userEditForm.country_code}
+                        onChange={(e) => setUserEditForm({ ...userEditForm, country_code: e.target.value.toUpperCase() })}
+                        placeholder="KR, US, AR, JP..."
+                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-amber-600 focus:outline-none transition-colors font-mono uppercase"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-bold text-gray-700 mb-1">
+                        도시명 (City)
+                      </label>
+                      <input
+                        type="text"
+                        value={userEditForm.city}
+                        onChange={(e) => setUserEditForm({ ...userEditForm, city: e.target.value })}
+                        placeholder="Seoul, Buenos Aires..."
+                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-amber-600 focus:outline-none transition-colors"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Password Reset Section for Admin */}
+                  <div className="p-3.5 bg-gradient-to-br from-amber-50/70 to-orange-50/40 rounded-xl border border-amber-200/90 space-y-2.5">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <div className="flex items-center gap-2">
+                        <div className="w-6 h-6 rounded-md bg-amber-600 text-white flex items-center justify-center shadow-2xs">
+                          <KeyRound className="w-3.5 h-3.5" />
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-bold text-gray-900 text-xs">
+                            비밀번호 초기화 (Reset Password)
+                          </span>
+                          <span className="text-[10px] bg-amber-200/70 text-amber-900 font-semibold px-1.5 py-0.5 rounded">
+                            관리자 전용
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setResetPasswordInput('12345678');
+                            setResetPwFeedback({ type: 'success', message: '비밀번호 기본값 "12345678"이 입력되었습니다.' });
+                          }}
+                          className="px-2 py-1 rounded bg-white hover:bg-gray-100 border border-gray-200 text-[10px] font-semibold text-gray-700 cursor-pointer transition-colors"
+                          title="기본 비밀번호 12345678 입력"
+                        >
+                          기본값 12345678
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleGenerateTempPassword}
+                          className="px-2 py-1 rounded bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-bold shadow-2xs cursor-pointer inline-flex items-center gap-1 transition-colors"
+                          title="랜덤 임시 비밀번호 생성"
+                        >
+                          <Sparkles className="w-3 h-3" />
+                          <span>임시비번 생성</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="block text-[11px] font-medium text-gray-700">
+                        초기화할 새 비밀번호 (New Password)
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <div className="relative flex-1">
+                          <input
+                            type={showResetPassword ? 'text' : 'password'}
+                            value={resetPasswordInput}
+                            onChange={(e) => {
+                              setResetPasswordInput(e.target.value);
+                              if (resetPwFeedback) setResetPwFeedback(null);
+                            }}
+                            placeholder="새 비밀번호 입력 또는 상단 생성 버튼 클릭"
+                            className="w-full pl-3 pr-20 py-2 bg-white border border-gray-300 rounded-lg text-xs text-gray-900 focus:border-amber-600 focus:outline-none transition-colors font-mono"
+                          />
+                          <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                            {resetPasswordInput && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(resetPasswordInput);
+                                  setCopiedPw(true);
+                                  setTimeout(() => setCopiedPw(false), 2000);
+                                }}
+                                className="p-1 rounded text-gray-400 hover:text-gray-700 hover:bg-gray-100 cursor-pointer"
+                                title="비밀번호 복사"
+                              >
+                                {copiedPw ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => setShowResetPassword(!showResetPassword)}
+                              className="p-1 rounded text-gray-400 hover:text-gray-700 hover:bg-gray-100 cursor-pointer"
+                              title={showResetPassword ? '비밀번호 가리기' : '비밀번호 보기'}
+                            >
+                              {showResetPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                            </button>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={handleDirectPasswordReset}
+                          disabled={!resetPasswordInput.trim() || isResettingPw}
+                          className="px-3 py-2 rounded-lg bg-orange-600 hover:bg-orange-700 text-white font-bold text-xs shadow-2xs cursor-pointer inline-flex items-center gap-1 transition-colors disabled:opacity-40 shrink-0"
+                          title="즉시 비밀번호 초기화 적용"
+                        >
+                          {isResettingPw ? (
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <KeyRound className="w-3.5 h-3.5" />
+                          )}
+                          <span>즉시 초기화</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Feedback message banner */}
+                    {resetPwFeedback && (
+                      <div
+                        className={`p-2.5 rounded-lg border text-[11px] flex items-center justify-between gap-2 ${
+                          resetPwFeedback.type === 'success'
+                            ? 'bg-green-50 border-green-200 text-green-800'
+                            : 'bg-red-50 border-red-200 text-red-800'
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                          {resetPwFeedback.type === 'success' ? (
+                            <CheckCircle2 className="w-3.5 h-3.5 text-green-600 shrink-0" />
+                          ) : (
+                            <AlertCircle className="w-3.5 h-3.5 text-red-600 shrink-0" />
+                          )}
+                          <span className="truncate">{resetPwFeedback.message}</span>
+                        </div>
+                        {resetPasswordInput && resetPwFeedback.type === 'success' && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(resetPasswordInput);
+                              setCopiedPw(true);
+                              setTimeout(() => setCopiedPw(false), 2000);
+                            }}
+                            className="text-[10px] underline font-bold hover:text-green-950 shrink-0 cursor-pointer"
+                          >
+                            {copiedPw ? '복사됨!' : '비번 복사'}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    
+                    <p className="text-[10px] text-gray-500">
+                      * [즉시 초기화]를 누르거나 새 비밀번호를 입력한 뒤 하단 [수정 완료] 버튼을 누르면 초기화가 적용됩니다.
+                    </p>
+                  </div>
+
+                  <div className="p-3 bg-amber-50/60 rounded-xl border border-amber-200/80 text-[11px] text-amber-800 space-y-1">
+                    <p className="font-bold flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                      <span>수정 시 주의사항</span>
+                    </p>
+                    <p>저장 버튼을 누르면 최종 확인 팝업이 표시되며, 확인 후 즉시 Firestore 데이터베이스 및 활성 세션에 반영됩니다.</p>
+                  </div>
+
+                  <div className="pt-2 flex items-center justify-end gap-2 border-t border-gray-100">
+                    <button
+                      type="button"
+                      onClick={() => setEditingUser(null)}
+                      className="px-4 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-700 font-semibold cursor-pointer transition-colors"
+                    >
+                      취소 (Cancel)
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={userActionSaving}
+                      className="px-5 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold shadow-xs cursor-pointer inline-flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                    >
+                      {userActionSaving ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          <span>저장 중...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Check className="w-3.5 h-3.5" />
+                          <span>수정 완료 (Save Changes)</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </form>
               </div>
             </div>
           )}
@@ -1227,43 +2217,240 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
 
             </div>
 
-            {/* Target Crawl Source Toggles */}
-            <div className="p-4 rounded-xl bg-gray-50 border border-gray-200 space-y-3 text-xs">
-              <div className="flex items-center justify-between">
-                <label className="block font-bold text-gray-800">
-                  Data Crawling Channels & Target Sources
-                </label>
-                <span className="text-[11px] text-red-600 font-semibold">
-                  Active: Atlanta & Birmingham Facebook Communities, Tangopolix, Global Calendars
-                </span>
+            {/* Data Crawling Channels & Target Sources Section */}
+            <div className="p-5 rounded-2xl bg-gray-50 border border-gray-200 space-y-4 text-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-gray-200">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Radio className="w-4 h-4 text-red-600" />
+                    <h4 className="font-extrabold text-sm text-gray-900 tracking-tight">
+                      Data Crawling Channels & Target Sources (크롤링 대상 채널 관리)
+                    </h4>
+                  </div>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    크롤링 시 활성화된 각 사이트에서 <strong className="text-gray-900">최근 1주일(Past 7 Days)</strong> 간의 신규 행사 정보를 검색하여 <strong className="text-red-700 font-semibold">[승인대상 목록 (PENDING)]</strong>에 자동 등록합니다.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-50 text-red-700 border border-red-200 font-bold text-[11px]">
+                    <Clock className="w-3 h-3" />
+                    <span>최근 1주일 검색</span>
+                  </div>
+                  <div className="px-2.5 py-1 rounded-lg bg-white border border-gray-200 text-gray-700 font-bold text-[11px]">
+                    {(cronConfig.channels || []).filter((c) => c.enabled).length} / {(cronConfig.channels || []).length} 활성
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRunCrawler}
+                    disabled={crawlerRunning}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-400 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
+                    title="현재 Active로 되어 있는 모든 사이트에서 최근 1주일동안 새로 등록된 정보를 서치하고 최근 크롤링 날짜를 업데이트합니다"
+                  >
+                    <Play className={`w-3.5 h-3.5 ${crawlerRunning ? 'animate-spin' : ''}`} />
+                    <span>{crawlerRunning ? '크롤링 중...' : '활성 채널 즉시 크롤링'}</span>
+                  </button>
+                  <button
+                    onClick={handleOpenAddChannel}
+                    className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>채널 추가</span>
+                  </button>
+                </div>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-                {[
-                  { key: 'facebook', name: 'Facebook (Atlanta, Birmingham & Public Events)' },
-                  { key: 'tangopolix', name: 'Tangopolix Portal' },
-                  { key: 'milongasInfo', name: 'Hoy Milonga / Info' },
-                  { key: 'marathonRegistry', name: 'Global Marathon Calendar' },
-                ].map((src) => {
-                  const isChecked = (cronConfig.sources as any)[src.key];
-                  return (
-                    <label key={src.key} className="flex items-center gap-2 cursor-pointer bg-white p-2.5 rounded-lg border border-gray-200">
-                      <input
-                        type="checkbox"
-                        checked={isChecked}
-                        onChange={(e) => {
-                          updateCronConfig({
-                            sources: {
-                              ...cronConfig.sources,
-                              [src.key]: e.target.checked,
-                            },
-                          });
-                        }}
-                        className="rounded text-red-600 focus:ring-red-500"
-                      />
-                      <span className="font-semibold text-gray-800">{src.name}</span>
-                    </label>
-                  );
-                })}
+
+              {/* Channels Search Filter */}
+              {(cronConfig.channels || []).length > 4 && (
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    type="text"
+                    placeholder="채널명, URL, 도시, 국가로 검색..."
+                    value={channelSearchQuery}
+                    onChange={(e) => setChannelSearchQuery(e.target.value)}
+                    className="w-full pl-8 pr-3 py-1.5 bg-white border border-gray-200 rounded-lg text-xs text-gray-800 placeholder-gray-400 focus:outline-none focus:border-red-600"
+                  />
+                </div>
+              )}
+
+              {/* Channels List Table (One Line per Channel) */}
+              <div className="rounded-xl border border-gray-200 bg-white shadow-2xs overflow-x-auto">
+                <table className="w-full table-fixed text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-gray-100/80 border-b border-gray-200 text-[11px] font-bold text-gray-600 uppercase tracking-wider">
+                      {/* 1. City (30% wider: ~9.5%, max-w-[95px]) */}
+                      <th className="py-2.5 px-2 w-[9.5%] min-w-[65px] max-w-[95px] whitespace-nowrap">City</th>
+                      {/* 2. Nation code (proper width to prevent overlap with Source) */}
+                      <th className="py-2.5 px-1 w-[68px] text-center whitespace-nowrap text-[10px]">Nation code</th>
+                      {/* 3. Source */}
+                      <th className="py-2.5 px-1.5 w-[68px] whitespace-nowrap">Source</th>
+                      {/* 4. 채널이름 */}
+                      <th className="py-2.5 px-2 w-[22%] whitespace-nowrap">채널이름</th>
+                      {/* 5. 사이트 주소 */}
+                      <th className="py-2.5 px-2 w-[26%] whitespace-nowrap">사이트 주소</th>
+                      {/* 6. 최근크롤링날짜 (tight width, text-center) */}
+                      <th className="py-2.5 px-1.5 w-[86px] text-center whitespace-nowrap">최근크롤링날짜</th>
+                      {/* 7. 누적 발견수 (tight width, centered to eliminate empty gap with date) */}
+                      <th className="py-2.5 px-1 w-[64px] text-center whitespace-nowrap">누적 발견수</th>
+                      {/* 8. 수정 */}
+                      <th className="py-2.5 px-1 w-[34px] text-center whitespace-nowrap">수정</th>
+                      {/* 9. 폐기 */}
+                      <th className="py-2.5 px-1 w-[34px] text-center whitespace-nowrap">폐기</th>
+                      {/* 10. Active */}
+                      <th className="py-2.5 px-1.5 w-[48px] text-center whitespace-nowrap">Active</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {(cronConfig.channels || [])
+                      .filter((ch) => {
+                        if (!channelSearchQuery.trim()) return true;
+                        const q = channelSearchQuery.toLowerCase();
+                        return (
+                          ch.name.toLowerCase().includes(q) ||
+                          ch.url.toLowerCase().includes(q) ||
+                          (ch.city && ch.city.toLowerCase().includes(q)) ||
+                          (ch.country_code && ch.country_code.toLowerCase().includes(q))
+                        );
+                      })
+                      .map((ch) => {
+                        const typeColorMap: Record<string, string> = {
+                          FACEBOOK: 'bg-blue-50 text-blue-700 border-blue-200',
+                          PORTAL: 'bg-purple-50 text-purple-700 border-purple-200',
+                          CALENDAR: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+                          COMMUNITY: 'bg-amber-50 text-amber-700 border-amber-200',
+                          WEBSITE: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+                          INSTAGRAM: 'bg-pink-50 text-pink-700 border-pink-200',
+                          OTHER: 'bg-gray-50 text-gray-700 border-gray-200',
+                        };
+                        const badgeClass = typeColorMap[ch.sourceType] || typeColorMap.OTHER;
+                        const sourceLabel = ch.sourceType === 'FACEBOOK' ? 'Facebook' 
+                          : ch.sourceType === 'WEBSITE' ? 'Website'
+                          : ch.sourceType === 'PORTAL' ? 'Portal'
+                          : ch.sourceType === 'CALENDAR' ? 'Calendar'
+                          : ch.sourceType === 'INSTAGRAM' ? 'Instagram'
+                          : ch.sourceType;
+
+                        return (
+                          <tr
+                            key={ch.id}
+                            className={`transition-colors text-xs ${
+                              ch.enabled
+                                ? 'hover:bg-gray-50/80 bg-white text-gray-900'
+                                : 'bg-gray-50/60 opacity-75 hover:bg-gray-100/60 text-gray-500'
+                            }`}
+                          >
+                            {/* 1. City (30% wider: max-w-[95px], truncate with ellipsis on overflow) */}
+                            <td className="py-2.5 px-2 max-w-[95px]">
+                              <div className="truncate font-semibold text-gray-800 text-xs" title={ch.city || '-'}>
+                                {ch.city ? ch.city : <span className="text-gray-400 font-normal">-</span>}
+                              </div>
+                            </td>
+
+                            {/* 2. Nation code */}
+                            <td className="py-2.5 px-1 text-center whitespace-nowrap">
+                              {ch.country_code ? (
+                                <span className="px-1.5 py-0.5 rounded font-mono font-bold text-[10px] bg-gray-100 text-gray-700 border border-gray-200">
+                                  {ch.country_code}
+                                </span>
+                              ) : (
+                                <span className="text-gray-400 font-normal">-</span>
+                              )}
+                            </td>
+
+                            {/* 3. Source */}
+                            <td className="py-2.5 px-1.5 whitespace-nowrap">
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border ${badgeClass}`}>
+                                {sourceLabel}
+                              </span>
+                            </td>
+
+                            {/* 4. 채널이름 */}
+                            <td className="py-2.5 px-2 truncate max-w-[170px]">
+                              <div className="truncate font-bold text-gray-900" title={ch.name}>
+                                {ch.name}
+                              </div>
+                            </td>
+
+                            {/* 5. 사이트 주소 */}
+                            <td className="py-2.5 px-2 truncate max-w-[210px]">
+                              <div className="truncate max-w-full">
+                                <a
+                                  href={ch.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 text-[11px] text-blue-600 hover:text-blue-800 hover:underline font-mono truncate max-w-full"
+                                  title={ch.url}
+                                >
+                                  <span className="truncate">{ch.url}</span>
+                                  <ExternalLink className="w-3 h-3 shrink-0 text-gray-400 hover:text-blue-600" />
+                                </a>
+                              </div>
+                            </td>
+
+                            {/* 6. 최근크롤링날짜 */}
+                            <td className="py-2.5 px-1.5 text-center text-gray-600 font-mono text-[11px] whitespace-nowrap">
+                              {ch.lastCrawledAt ? ch.lastCrawledAt.substring(0, 10) : <span className="text-gray-400 font-sans">미실행</span>}
+                            </td>
+
+                            {/* 7. 누적 발견수 (빈공간 제거: centered & compact padding) */}
+                            <td className="py-2.5 px-1 text-center font-mono font-bold text-gray-800 whitespace-nowrap">
+                              {ch.discoveredCount || 0}건
+                            </td>
+
+                            {/* 8. 수정 버튼 */}
+                            <td className="py-2.5 px-1 text-center whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditChannel(ch)}
+                                className="p-1.5 rounded-lg text-gray-500 hover:text-blue-600 hover:bg-blue-50 transition-colors cursor-pointer inline-flex items-center justify-center"
+                                title="채널 수정"
+                              >
+                                <Edit3 className="w-3.5 h-3.5" />
+                              </button>
+                            </td>
+
+                            {/* 9. 폐기 버튼 */}
+                            <td className="py-2.5 px-1 text-center whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteChannel(ch)}
+                                className="p-1.5 rounded-lg text-gray-500 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer inline-flex items-center justify-center"
+                                title="채널 폐기"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </td>
+
+                            {/* 10. Active 토글 버튼 */}
+                            <td className="py-2.5 px-1.5 text-center whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => toggleCrawlingChannel(ch.id)}
+                                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer align-middle ${
+                                  ch.enabled ? 'bg-red-600' : 'bg-gray-300'
+                                }`}
+                                title={ch.enabled ? '채널 비활성화' : '채널 활성화'}
+                              >
+                                <span
+                                  className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                                    ch.enabled ? 'translate-x-4.5' : 'translate-x-1'
+                                  }`}
+                                />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-[11px] leading-relaxed flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                <div>
+                  <strong>자동/수동 크롤링 검색 기준:</strong> 크롤링 실행 시 각 채널 사이트에서 <strong>최근 1주일 이내</strong>에 등록되거나 게시된 정보를 중복 검사한 뒤, <strong>승인대상 목록 (PENDING)</strong>으로 등록합니다. 등록된 이벤트는 상단 <strong>[이벤트 관리 &gt; PENDING]</strong> 탭에서 승인 또는 반려하실 수 있습니다.
+                </div>
               </div>
             </div>
 
@@ -1271,7 +2458,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
             <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-t border-gray-100">
               <div className="text-xs text-gray-500 space-y-0.5">
                 <p>Last run: <strong className="text-gray-800">{cronConfig.lastRunAt || 'None'}</strong></p>
-                <p>Next scheduled: <strong className="text-gray-800">{cronConfig.nextRunAt || '2026-09-08T02:00:00Z'}</strong></p>
+                <p>Next scheduled: <strong className="text-gray-800">{cronConfig.nextRunAt || '2026-09-11T01:00:00Z'}</strong></p>
               </div>
 
               <button
@@ -1280,29 +2467,65 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
                 className="px-5 py-2.5 rounded-lg bg-red-600 hover:bg-red-700 active:bg-red-800 text-white text-xs font-bold shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer"
               >
                 <RefreshCw className={`w-4 h-4 ${crawlerRunning ? 'animate-spin' : ''}`} />
-                <span>{crawlerRunning ? 'Crawling data & analyzing duplicates...' : 'Run Crawler Now'}</span>
+                <span>{crawlerRunning ? '최근 1주일 데이터 검색 및 크롤링 중...' : 'Run Crawler Now (수동 크롤링 실행)'}</span>
               </button>
             </div>
 
             {/* Crawler Result Feedback Box */}
             {crawlerResult && (
-              <div className="p-4 rounded-xl bg-white border border-gray-200 space-y-3 text-xs">
-                <div className="flex items-center gap-2 text-green-700 font-bold">
-                  <CheckCircle2 className="w-4 h-4" />
-                  <span>Crawl & duplicate check completed!</span>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="p-2.5 rounded-lg bg-green-50 text-green-800 font-semibold border border-green-100">
-                    New events added: <strong className="text-base font-extrabold">{crawlerResult.addedCount}</strong>
+              <div className="p-5 rounded-xl bg-white border border-gray-200 space-y-3.5 text-xs shadow-xs animate-in fade-in duration-200">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-gray-100">
+                  <div className="flex items-center gap-2 text-green-700 font-extrabold text-sm">
+                    <CheckCircle2 className="w-5 h-5 text-green-600" />
+                    <span>크롤링 및 최근 1주일 데이터 검색 완료!</span>
                   </div>
-                  <div className="p-2.5 rounded-lg bg-amber-50 text-amber-800 font-semibold border border-amber-100">
-                    Duplicates blocked: <strong className="text-base font-extrabold">{crawlerResult.duplicateCount}</strong>
+                  {crawlerResult.timeWindow && (
+                    <span className="px-2.5 py-0.5 rounded-full bg-gray-100 text-gray-700 font-mono text-[11px] font-semibold">
+                      검색 기간: {crawlerResult.timeWindow}
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="p-3 rounded-xl bg-green-50 text-green-900 border border-green-200 flex flex-col justify-between">
+                    <span className="font-semibold text-xs text-green-800">승인대상 목록(PENDING) 신규 등록:</span>
+                    <div className="mt-1 flex items-baseline gap-2">
+                      <strong className="text-2xl font-black text-green-700">+{crawlerResult.addedCount}</strong>
+                      <span className="text-xs text-green-700 font-medium">건 (관리자 승인 대기)</span>
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-xl bg-amber-50 text-amber-900 border border-amber-200 flex flex-col justify-between">
+                    <span className="font-semibold text-xs text-amber-800">중복 필터링 제외:</span>
+                    <div className="mt-1 flex items-baseline gap-2">
+                      <strong className="text-2xl font-black text-amber-700">{crawlerResult.duplicateCount}</strong>
+                      <span className="text-xs text-amber-700 font-medium">건 차단됨</span>
+                    </div>
                   </div>
                 </div>
-                {crawlerResult.duplicatesDetails.length > 0 && (
-                  <div className="space-y-1">
-                    <p className="font-semibold text-gray-700">Blocked duplicate details:</p>
-                    <div className="max-h-32 overflow-y-auto space-y-1 p-2 rounded-lg bg-gray-50 border border-gray-200 font-mono text-[11px] text-gray-600">
+
+                {/* Quick Link to Pending Approvals */}
+                {crawlerResult.addedCount > 0 && (
+                  <div className="p-3 rounded-xl bg-red-50 border border-red-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="text-red-900 text-xs">
+                      <strong>승인 대기 안내:</strong> 최근 1주일 간의 크롤링 데이터 {crawlerResult.addedCount}건이 승인 대상 목록에 등록되었습니다.
+                    </div>
+                    <button
+                      onClick={() => {
+                        setActiveTab('events');
+                        setEventFilterStatus('PENDING');
+                      }}
+                      className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-bold text-xs shadow-xs transition-colors flex items-center justify-center gap-1.5 shrink-0 cursor-pointer"
+                    >
+                      <span>승인대상 목록 검토하기 (Go to Pending)</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+
+                {crawlerResult.duplicatesDetails && crawlerResult.duplicatesDetails.length > 0 && (
+                  <div className="space-y-1 pt-1">
+                    <p className="font-semibold text-gray-700 text-[11px]">중복 필터링 상세 로그:</p>
+                    <div className="max-h-28 overflow-y-auto space-y-1 p-2.5 rounded-lg bg-gray-50 border border-gray-200 font-mono text-[10px] text-gray-600">
                       {crawlerResult.duplicatesDetails.map((line, idx) => (
                         <div key={idx} className="truncate">{line}</div>
                       ))}
@@ -1314,36 +2537,40 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
 
           </div>
 
-          {/* Past Execution History Table */}
+          {/* Past Execution History Table (Single screen table-fixed without horizontal scroll) */}
           <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-xs space-y-4">
             <h4 className="font-extrabold text-base text-gray-900">Cron Scheduler Execution History</h4>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs text-gray-700">
+            <div className="w-full overflow-hidden">
+              <table className="w-full table-fixed text-left text-xs text-gray-700 border-collapse">
                 <thead>
-                  <tr className="border-b border-gray-200 bg-gray-50 text-gray-500 uppercase font-semibold">
-                    <th className="py-2.5 px-3">Timestamp</th>
-                    <th className="py-2.5 px-3">Status</th>
-                    <th className="py-2.5 px-3">Discovered</th>
-                    <th className="py-2.5 px-3">New Added</th>
-                    <th className="py-2.5 px-3">Duplicates Blocked</th>
-                    <th className="py-2.5 px-3">Duration</th>
-                    <th className="py-2.5 px-3">Message</th>
+                  <tr className="border-b border-gray-200 bg-gray-50 text-gray-500 uppercase font-semibold text-[11px]">
+                    <th className="w-[18%] py-2.5 px-2">Timestamp</th>
+                    <th className="w-[10%] py-2.5 px-1.5 text-center">Status</th>
+                    <th className="w-[10%] py-2.5 px-1.5 text-center">Discovered</th>
+                    <th className="w-[10%] py-2.5 px-1.5 text-center">Added</th>
+                    <th className="w-[12%] py-2.5 px-1.5 text-center">Blocked</th>
+                    <th className="w-[10%] hidden sm:table-cell py-2.5 px-1.5 text-center">Duration</th>
+                    <th className="w-[30%] py-2.5 px-2">Message</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 font-mono">
                   {cronConfig.runHistory.map((log) => (
                     <tr key={log.id} className="hover:bg-gray-50/70">
-                      <td className="py-2.5 px-3 text-gray-700">{log.timestamp.replace('T', ' ').substring(0, 19)}</td>
-                      <td className="py-2.5 px-3">
-                        <span className="px-2 py-0.5 rounded bg-green-50 text-green-700 font-bold border border-green-200">
+                      <td className="py-2.5 px-2 text-gray-700 truncate" title={log.timestamp}>
+                        {log.timestamp.replace('T', ' ').substring(0, 19)}
+                      </td>
+                      <td className="py-2.5 px-1.5 text-center">
+                        <span className="px-1.5 py-0.5 rounded bg-green-50 text-green-700 font-bold border border-green-200 text-[10px]">
                           {log.status}
                         </span>
                       </td>
-                      <td className="py-2.5 px-3">{log.itemsDiscovered}</td>
-                      <td className="py-2.5 px-3 font-bold text-green-700">+{log.itemsAdded}</td>
-                      <td className="py-2.5 px-3 text-amber-700">-{log.duplicatesBlocked}</td>
-                      <td className="py-2.5 px-3 text-gray-500">{log.durationMs}ms</td>
-                      <td className="py-2.5 px-3 font-sans text-gray-600 truncate max-w-xs">{log.message}</td>
+                      <td className="py-2.5 px-1.5 text-center">{log.itemsDiscovered}</td>
+                      <td className="py-2.5 px-1.5 text-center font-bold text-green-700">+{log.itemsAdded}</td>
+                      <td className="py-2.5 px-1.5 text-center text-amber-700">-{log.duplicatesBlocked}</td>
+                      <td className="py-2.5 px-1.5 text-center text-gray-500 hidden sm:table-cell">{log.durationMs}ms</td>
+                      <td className="py-2.5 px-2 font-sans text-gray-600 truncate" title={log.message}>
+                        {log.message}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1383,9 +2610,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
               {[
                 {
-                  title: '📢 Update Announcement & Banner',
-                  desc: 'Propose and update top banner and main headline for the upcoming tango season',
-                  prompt: 'Update the homepage top announcement banner and main slogan to attractively highlight upcoming tango marathon and festival dates.',
+                  title: '✨ Auto-Update Curated Notice',
+                  desc: 'Auto-curate and refresh the live Curated Notice based on latest tango events',
+                  prompt: 'Analyze upcoming approved tango events and generate an engaging, concise Curated Notice highlighting top cities and upcoming festivals.',
                 },
                 {
                   title: '🔍 Full Event Data Quality Audit',
@@ -1434,7 +2661,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
                 rows={3}
                 value={geminiPrompt}
                 onChange={(e) => setGeminiPrompt(e.target.value)}
-                placeholder="e.g. 'Change homepage banner announcement to special summer marathon season', 'Add notice for upcoming US tango events', 'Update header notice text'..."
+                placeholder="e.g. 'Curate upcoming festivals for Curated Notice', 'Audit upcoming US events for duplicates', 'Recommend top tango hubs'..."
                 className="w-full p-3.5 text-xs bg-gray-50 border border-gray-200 rounded-xl text-gray-900 focus:outline-none focus:border-purple-600 focus:bg-white"
               />
               <button
@@ -1469,7 +2696,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
                       className="px-3 py-1.5 rounded-lg bg-green-600 hover:bg-green-700 text-white text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
                     >
                       <Check className="w-3.5 h-3.5" />
-                      <span>Apply to Live Site</span>
+                      <span>Apply Curated Notice (자동 반영)</span>
                     </button>
                   )}
                 </div>
@@ -1480,7 +2707,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
 
                 {geminiSuggestedConfig && (
                   <div className="p-3 rounded-lg bg-white border border-purple-200 text-xs space-y-2">
-                    <span className="font-bold text-purple-800">📋 Proposed Site Configuration:</span>
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-purple-800">📋 Proposed Site Configuration:</span>
+                      <span className="text-[10px] text-purple-600 font-medium">※ Curated Notice만 자동 반영되며, Top Announcement와 Hero Headline은 수동 관리 설정에 따라 보존됩니다.</span>
+                    </div>
                     <pre className="p-2 rounded bg-gray-50 border border-gray-200 font-mono text-[11px] text-gray-700 overflow-x-auto">
                       {JSON.stringify(geminiSuggestedConfig, null, 2)}
                     </pre>
@@ -1491,50 +2721,186 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
           </div>
 
           {/* Current Live Site Configuration Inspector & Manual Overrider */}
-          <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-xs space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+          <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-xs space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-gray-100 gap-2">
               <div>
-                <h4 className="font-bold text-base text-gray-900">Live Site Configuration State</h4>
-                <p className="text-xs text-gray-500">Global site content that can be updated dynamically by Gemini AI or edited manually by administrators.</p>
+                <h4 className="font-bold text-base text-gray-900 flex items-center gap-2">
+                  <span>Live Site Configuration State</span>
+                  <span className="text-[11px] font-normal text-gray-500">(실시간 사이트 설정 관리)</span>
+                </h4>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  <strong className="text-amber-800">Top Announcement</strong>와 <strong className="text-amber-800">Main Hero Headline</strong>은 관리자 <strong className="text-amber-700">수동 업데이트</strong> 항목이며, <strong className="text-purple-700">Curated Notice</strong>는 시스템 및 AI에 의해 <strong className="text-purple-700">자동 업데이트</strong>됩니다.
+                </p>
               </div>
-              <span className="text-[11px] text-gray-500 font-mono">
-                Last updated: {siteConfig.lastUpdatedAt.substring(0, 16).replace('T', ' ')}
-              </span>
+              <div className="flex flex-col items-start sm:items-end text-[11px] text-gray-500 font-mono shrink-0">
+                <span>Last updated: {siteConfig.lastUpdatedAt.substring(0, 16).replace('T', ' ')}</span>
+                {siteConfig.curatedNoticeLastAutoUpdated && (
+                  <span className="text-purple-600 text-[10px]">
+                    Curated Auto-sync: {siteConfig.curatedNoticeLastAutoUpdated.substring(0, 16).replace('T', ' ')}
+                  </span>
+                )}
+              </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-              <div className="space-y-1">
-                <label className="font-bold text-gray-700">Top Announcement Notice:</label>
-                <input
-                  type="text"
-                  value={siteConfig.siteAnnouncement}
-                  onChange={(e) => updateSiteConfig({ siteAnnouncement: e.target.value })}
-                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-purple-600"
-                />
+            {/* 1 & 2: Manual Update Fields (Top Announcement Notice & Main Hero Headline) */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-xs text-gray-700 font-bold">
+                <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                <span>수동 업데이트 영역 (Manual Management Only)</span>
+                <span className="text-[11px] font-normal text-gray-400">— 관리자가 직접 입력하여 수정하며, AI나 자동 프로세스에 의해 임의로 변경되지 않습니다.</span>
               </div>
 
-              <div className="space-y-1">
-                <label className="font-bold text-gray-700">Main Hero Headline:</label>
-                <input
-                  type="text"
-                  value={siteConfig.heroHeadline}
-                  onChange={(e) => updateSiteConfig({ heroHeadline: e.target.value })}
-                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-purple-600"
-                />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                {/* Top Announcement Notice (Manual) */}
+                <div className="space-y-1.5 p-3.5 rounded-xl bg-stone-50/60 border border-stone-200/80">
+                  <div className="flex items-center justify-between">
+                    <label className="font-bold text-gray-800 flex items-center gap-1.5">
+                      <span>Top Announcement Notice</span>
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200 flex items-center gap-1">
+                        <Edit3 className="w-2.5 h-2.5" /> 수동 업데이트 (Manual)
+                      </span>
+                    </label>
+                  </div>
+                  <input
+                    type="text"
+                    value={siteConfig.siteAnnouncement}
+                    onChange={(e) => updateSiteConfig({ siteAnnouncement: e.target.value })}
+                    placeholder="최상단 공지 배너 문구를 직접 입력하세요..."
+                    className="w-full px-3 py-2 bg-white border border-gray-300 rounded-lg text-xs text-gray-900 focus:outline-none focus:border-amber-600 focus:ring-1 focus:ring-amber-500 shadow-2xs"
+                  />
+                  <p className="text-[11px] text-gray-500">
+                    홈페이지 최상단 레드 배너에 노출되는 주요 공지사항입니다.
+                  </p>
+                </div>
+
+                {/* Main Hero Headline (Manual) */}
+                <div className="space-y-1.5 p-3.5 rounded-xl bg-stone-50/60 border border-stone-200/80">
+                  <div className="flex items-center justify-between">
+                    <label className="font-bold text-gray-800 flex items-center gap-1.5">
+                      <span>Main Hero Headline</span>
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200 flex items-center gap-1">
+                        <Edit3 className="w-2.5 h-2.5" /> 수동 업데이트 (Manual)
+                      </span>
+                    </label>
+                  </div>
+                  <input
+                    type="text"
+                    value={siteConfig.heroHeadline}
+                    onChange={(e) => updateSiteConfig({ heroHeadline: e.target.value })}
+                    placeholder="메인 히어로 헤드라인 문구를 직접 입력하세요..."
+                    className="w-full px-3 py-2 bg-white border border-gray-300 rounded-lg text-xs text-gray-900 focus:outline-none focus:border-amber-600 focus:ring-1 focus:ring-amber-500 shadow-2xs"
+                  />
+                  <p className="text-[11px] text-gray-500">
+                    홈페이지 상단 메인 타이틀(H1)로 표시되는 핵심 슬로건입니다.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* 3: Auto-Updated Field (Curated Notice) */}
+            <div className="space-y-2 p-4 rounded-xl bg-purple-50/60 border border-purple-200/90 text-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-purple-600 animate-pulse"></span>
+                  <label className="font-bold text-gray-900 flex items-center gap-1.5">
+                    <span>Curated Notice</span>
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200 flex items-center gap-1">
+                      <Sparkles className="w-2.5 h-2.5 text-purple-600" />
+                      자동 업데이트 (Auto-Updated by AI & Data)
+                    </span>
+                  </label>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleTriggerCuratedAutoUpdate}
+                    disabled={curatedAutoUpdating}
+                    className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 disabled:bg-purple-300 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                    title="최신 행사 및 주요 도시 데이터를 기반으로 Curated Notice를 즉시 자동 갱신합니다."
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${curatedAutoUpdating ? 'animate-spin' : ''}`} />
+                    <span>{curatedAutoUpdating ? '자동 갱신 중...' : '⚡ 지금 자동 업데이트 실행 (Auto-Update Now)'}</span>
+                  </button>
+                </div>
               </div>
 
-              <div className="space-y-1 md:col-span-2">
-                <label className="font-bold text-gray-700">Curated Notice:</label>
+              <div className="pt-1">
                 <input
                   type="text"
                   value={siteConfig.curatedNotice}
                   onChange={(e) => updateSiteConfig({ curatedNotice: e.target.value })}
-                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-purple-600"
+                  className="w-full px-3 py-2 bg-white border border-purple-300 rounded-lg text-xs text-gray-900 focus:outline-none focus:border-purple-600 focus:ring-1 focus:ring-purple-500 shadow-2xs"
                 />
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between text-[11px] text-gray-500 pt-0.5 gap-1">
+                <p>
+                  크롤러가 새 행사를 수집하거나 AI 사이트 관리 명령 실행 시 주요 도시 및 추천 행사를 바탕으로 자동 갱신됩니다.
+                </p>
+                {curatedUpdateSuccessMsg && (
+                  <span className="text-purple-700 font-bold bg-purple-100/80 px-2 py-0.5 rounded border border-purple-200 animate-fade-in">
+                    {curatedUpdateSuccessMsg}
+                  </span>
+                )}
               </div>
             </div>
 
-            <div className="flex items-center justify-between pt-2 text-xs">
+            {/* 4: Hero Background Photo (사용자 첨부 실제 사진 등록) */}
+            <div className="space-y-2 p-4 rounded-xl bg-gray-50 border border-gray-200 text-xs">
+              <div className="flex items-center justify-between">
+                <label className="font-bold text-gray-900 flex items-center gap-1.5">
+                  <Camera className="w-3.5 h-3.5 text-gray-600" />
+                  <span>Hero Banner Background Image (상단 히어로 배경 사진 설정)</span>
+                </label>
+                {siteConfig.heroBackgroundImage && (
+                  <button
+                    type="button"
+                    onClick={() => updateSiteConfig({ heroBackgroundImage: undefined })}
+                    className="text-[11px] text-red-600 hover:text-red-700 font-semibold cursor-pointer"
+                  >
+                    기본 배경으로 초기화
+                  </button>
+                )}
+              </div>
+              <p className="text-[11px] text-gray-500">
+                인공지능 생성이 아닌 직접 촬영하신 실제 밀롱가 홀 사진이나 스크린샷 파일을 배경으로 등록할 수 있습니다. 등록 즉시 우측 페이드 그라데이션이 적용됩니다.
+              </p>
+              <div className="flex items-center gap-3 pt-1">
+                <input
+                  type="file"
+                  id="admin-hero-bg-upload"
+                  accept="image/*"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      const reader = new FileReader();
+                      reader.onload = (ev) => {
+                        const dataUrl = ev.target?.result as string;
+                        if (dataUrl) {
+                          updateSiteConfig({ heroBackgroundImage: dataUrl });
+                        }
+                      };
+                      reader.readAsDataURL(file);
+                    }
+                  }}
+                  className="hidden"
+                />
+                <label
+                  htmlFor="admin-hero-bg-upload"
+                  className="px-3 py-1.5 rounded-lg bg-white border border-gray-300 hover:border-gray-400 text-gray-700 font-medium text-xs cursor-pointer shadow-2xs inline-flex items-center gap-1.5 transition-colors"
+                >
+                  <Camera className="w-3.5 h-3.5 text-gray-500" />
+                  <span>실제 사진 파일 선택 (Screenshot / IMG_2077 등)</span>
+                </label>
+                <span className="text-[11px] text-gray-500">
+                  {siteConfig.heroBackgroundImage ? '✓ 사용자 직접 업로드 사진이 적용되어 있습니다' : '기본 밀롱가 홀 배경이 설정되어 있습니다'}
+                </span>
+              </div>
+            </div>
+
+            {/* Bottom options */}
+            <div className="flex items-center justify-between pt-2 text-xs border-t border-gray-100">
               <label className="flex items-center gap-2 font-semibold text-gray-700 cursor-pointer">
                 <input
                   type="checkbox"
@@ -1542,7 +2908,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
                   onChange={(e) => updateSiteConfig({ announcementEnabled: e.target.checked })}
                   className="rounded text-red-600"
                 />
-                <span>Enable Top Announcement Bar</span>
+                <span>Enable Top Announcement Bar (상단 공지 배너 활성화)</span>
               </label>
 
               <span className="text-[11px] text-green-700 bg-green-50 px-2 py-0.5 rounded font-semibold border border-green-200">
@@ -1551,6 +2917,308 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang }) =
             </div>
           </div>
 
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* ADD / EDIT CRAWLING CHANNEL MODAL */}
+      {/* ========================================================================= */}
+      {isChannelModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white border border-gray-200 rounded-2xl p-6 max-w-lg w-full shadow-2xl space-y-4 text-xs text-gray-800 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-red-100 text-red-600 flex items-center justify-center shrink-0">
+                  <Radio className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-base text-gray-900">
+                    {editingChannel ? '크롤링 대상 채널 수정 (Edit Channel)' : '새 크롤링 대상 채널 추가 (Add Channel)'}
+                  </h3>
+                  <p className="text-[11px] text-gray-500">
+                    Facebook 그룹, 탱고 전문 포털, 캘린더 등 크롤링 대상 사이트를 설정합니다.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsChannelModalOpen(false)}
+                className="text-gray-400 hover:text-gray-600 p-1.5 rounded-lg hover:bg-gray-100 cursor-pointer transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveChannel} className="space-y-3.5">
+              <div className="space-y-1">
+                <label className="block font-bold text-gray-700">
+                  채널 / 사이트 이름 <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="예: Facebook (Atlanta & Birmingham Tango Communities)"
+                  value={channelForm.name}
+                  onChange={(e) => setChannelForm({ ...channelForm, name: e.target.value })}
+                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-red-600 focus:outline-none"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block font-bold text-gray-700">
+                  대상 웹사이트 / 그룹 URL <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="url"
+                  required
+                  placeholder="예: https://www.facebook.com/groups/tangobaratlanta"
+                  value={channelForm.url}
+                  onChange={(e) => setChannelForm({ ...channelForm, url: e.target.value })}
+                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 font-mono focus:bg-white focus:border-red-600 focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="block font-bold text-gray-700">플랫폼 / 채널 유형</label>
+                  <select
+                    value={channelForm.sourceType}
+                    onChange={(e) => setChannelForm({ ...channelForm, sourceType: e.target.value as any })}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-semibold text-gray-800 focus:bg-white focus:border-red-600 focus:outline-none"
+                  >
+                    <option value="FACEBOOK">Facebook 커뮤니티/그룹</option>
+                    <option value="PORTAL">전문 탱고 포털 (Tangopolix 등)</option>
+                    <option value="CALENDAR">캘린더 / 마라톤 레지스트리</option>
+                    <option value="COMMUNITY">지역 동호회 / 카페</option>
+                    <option value="WEBSITE">공식 웹사이트 / 블로그</option>
+                    <option value="INSTAGRAM">Instagram 피드</option>
+                    <option value="OTHER">기타 소셜 / 웹</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block font-bold text-gray-700">대상 국가 코드</label>
+                  <input
+                    type="text"
+                    maxLength={4}
+                    placeholder="예: US, KR, AR, ALL"
+                    value={channelForm.country_code}
+                    onChange={(e) => setChannelForm({ ...channelForm, country_code: e.target.value.toUpperCase() })}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 uppercase font-mono focus:bg-white focus:border-red-600 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="block font-bold text-gray-700">대상 도시 (City)</label>
+                  <input
+                    type="text"
+                    placeholder="예: Atlanta, Seoul, Global"
+                    value={channelForm.city}
+                    onChange={(e) => setChannelForm({ ...channelForm, city: e.target.value })}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-red-600 focus:outline-none"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block font-bold text-gray-700">주 / 지역 (State / Province)</label>
+                  <input
+                    type="text"
+                    placeholder="예: GA, AL, Seoul"
+                    value={channelForm.state}
+                    onChange={(e) => setChannelForm({ ...channelForm, state: e.target.value })}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-red-600 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="block font-bold text-gray-700">채널 설명 및 수집 메모</label>
+                <textarea
+                  rows={2}
+                  placeholder="예: 주말 정기 밀롱가 및 페스티벌 행사 공지 정기 수집"
+                  value={channelForm.description}
+                  onChange={(e) => setChannelForm({ ...channelForm, description: e.target.value })}
+                  className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-red-600 focus:outline-none"
+                />
+              </div>
+
+              <div className="pt-1 flex items-center justify-between">
+                <label className="flex items-center gap-2 font-semibold text-gray-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={channelForm.enabled}
+                    onChange={(e) => setChannelForm({ ...channelForm, enabled: e.target.checked })}
+                    className="rounded text-red-600"
+                  />
+                  <span>크롤링 채널 활성화 (Active)</span>
+                </label>
+              </div>
+
+              <div className="pt-3 flex items-center justify-end gap-2 border-t border-gray-100">
+                <button
+                  type="button"
+                  onClick={() => setIsChannelModalOpen(false)}
+                  className="px-4 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-700 font-semibold cursor-pointer transition-colors"
+                >
+                  취소
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-bold shadow-xs cursor-pointer transition-colors flex items-center gap-1.5"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  <span>{editingChannel ? '수정 내용 저장' : '새 채널 등록'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* GLOBAL CONFIRMATION POPUP MODAL (모든 삭제 및 변경 사전 확인 팝업) */}
+      {/* ========================================================================= */}
+      {confirmModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white border border-gray-200 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4 text-xs text-gray-800 animate-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-3">
+              <div
+                className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                  confirmModal.variant === 'danger'
+                    ? 'bg-red-100 text-red-600'
+                    : confirmModal.variant === 'warning'
+                    ? 'bg-amber-100 text-amber-600'
+                    : 'bg-blue-100 text-blue-600'
+                }`}
+              >
+                {confirmModal.variant === 'danger' ? (
+                  <AlertTriangle className="w-5 h-5" />
+                ) : confirmModal.variant === 'warning' ? (
+                  <AlertCircle className="w-5 h-5" />
+                ) : (
+                  <Shield className="w-5 h-5" />
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="font-extrabold text-base text-gray-900 leading-snug">
+                  {confirmModal.title}
+                </h3>
+                <div className="mt-2 text-xs text-gray-600 leading-relaxed whitespace-pre-line bg-gray-50 p-3 rounded-xl border border-gray-100">
+                  {confirmModal.message}
+                </div>
+              </div>
+            </div>
+
+            <div className="pt-2 flex items-center justify-end gap-2 border-t border-gray-100">
+              <button
+                type="button"
+                onClick={() => setConfirmModal((prev) => ({ ...prev, isOpen: false }))}
+                className="px-4 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-700 font-semibold cursor-pointer transition-colors"
+              >
+                {confirmModal.cancelText || '취소'}
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await confirmModal.onConfirm();
+                  } catch (err) {
+                    console.error('Confirm action failed:', err);
+                  }
+                }}
+                className={`px-5 py-2 rounded-lg font-bold text-white shadow-xs cursor-pointer transition-colors inline-flex items-center gap-1.5 ${
+                  confirmModal.variant === 'danger'
+                    ? 'bg-red-600 hover:bg-red-700'
+                    : confirmModal.variant === 'warning'
+                    ? 'bg-amber-600 hover:bg-amber-700'
+                    : 'bg-blue-600 hover:bg-blue-700'
+                }`}
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>{confirmModal.confirmText || '확인 (Confirm)'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* APPROVAL & AUTOMATED EMAIL NOTIFICATION SUCCESS MODAL                     */}
+      {/* ========================================================================= */}
+      {approvalEmailSuccessModal?.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white border border-gray-200 rounded-2xl p-6 max-w-lg w-full shadow-2xl space-y-4 text-xs text-gray-800 animate-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
+                <CheckCircle2 className="w-5 h-5" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="font-extrabold text-base text-gray-900 leading-snug">
+                  Event Approved & Published!
+                </h3>
+                <p className="text-gray-500 text-xs mt-0.5">
+                  이벤트가 승인되어 공개 일정표에 즉시 게시되었으며, 작성자에게 영문 안내 회신 메일이 발송되었습니다.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setApprovalEmailSuccessModal(null)}
+                className="text-gray-400 hover:text-gray-600 p-1 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Email Dispatch Info Box */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2.5 text-xs">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-200">
+                <span className="font-bold text-gray-700 flex items-center gap-1.5">
+                  <Mail className="w-3.5 h-3.5 text-blue-600" />
+                  Automated Reply Notification Details
+                </span>
+                <span className="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-extrabold text-[10px]">
+                  DISPATCHED (SUCCESS)
+                </span>
+              </div>
+              
+              <div className="grid grid-cols-[80px_1fr] gap-1.5">
+                <span className="text-gray-500 font-semibold">Event:</span>
+                <span className="font-bold text-gray-900">{approvalEmailSuccessModal.eventName}</span>
+                
+                <span className="text-gray-500 font-semibold">Recipient:</span>
+                <span className="font-mono font-bold text-blue-700">{approvalEmailSuccessModal.recipientEmail}</span>
+                
+                <span className="text-gray-500 font-semibold">Language:</span>
+                <span className="font-medium text-gray-800">English (영문 회신 메일)</span>
+
+                <span className="text-gray-500 font-semibold">Subject:</span>
+                <span className="font-medium text-gray-800">
+                  {approvalEmailSuccessModal.emailLog?.subject || `Your Tango Event "${approvalEmailSuccessModal.eventName}" has been Approved and is Live!`}
+                </span>
+              </div>
+
+              {approvalEmailSuccessModal.emailLog?.body && (
+                <div className="mt-2 pt-2 border-t border-slate-200">
+                  <span className="text-[11px] font-bold text-gray-600 block mb-1">Sent English Reply Body:</span>
+                  <pre className="p-3 bg-white border border-slate-200 rounded-lg text-[11px] font-mono text-gray-800 max-h-52 overflow-y-auto whitespace-pre-wrap leading-relaxed select-all">
+                    {approvalEmailSuccessModal.emailLog.body}
+                  </pre>
+                </div>
+              )}
+            </div>
+
+            <div className="pt-2 flex items-center justify-end">
+              <button
+                type="button"
+                onClick={() => setApprovalEmailSuccessModal(null)}
+                className="px-5 py-2 rounded-lg bg-gray-900 hover:bg-gray-800 font-bold text-white shadow-xs cursor-pointer transition-colors"
+              >
+                Confirm (확인)
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

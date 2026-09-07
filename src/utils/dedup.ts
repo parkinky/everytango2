@@ -110,14 +110,15 @@ export async function hashAnswer(text: string): Promise<string> {
   return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-// Format date range: 2026-10-15 (Thu) ~ 2026-10-18 (Sun)
+// Format date range: 2026/10/15(Thu) ~ 2026/10/18(Sun)
 export function formatDateRange(startDateStr: string, endDateStr: string): string {
   if (!startDateStr) return '';
   const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   
   const start = new Date(startDateStr + 'T00:00:00');
   const startDay = weekdays[start.getDay()];
-  const startFormatted = `${startDateStr} (${startDay})`;
+  const startSlash = startDateStr.replace(/-/g, '/');
+  const startFormatted = `${startSlash}(${startDay})`;
 
   if (!endDateStr || endDateStr === startDateStr) {
     return startFormatted;
@@ -125,21 +126,23 @@ export function formatDateRange(startDateStr: string, endDateStr: string): strin
 
   const end = new Date(endDateStr + 'T00:00:00');
   const endDay = weekdays[end.getDay()];
-  const endFormatted = `${endDateStr} (${endDay})`;
+  const endSlash = endDateStr.replace(/-/g, '/');
+  const endFormatted = `${endSlash}(${endDay})`;
 
   return `${startFormatted} ~ ${endFormatted}`;
 }
 
 // Format date into 2 lines for ultra-compact display:
-// Line 1: startDate (weekday)
-// Line 2: ~ endDate (weekday)
+// Line 1: startDate(weekday) e.g. 2026/09/11(Fri)
+// Line 2: ~ endDate(weekday) e.g. ~ 2026/09/13(Sun)
 export function formatTwoLineDate(startDateStr: string, endDateStr: string): { start: string; end: string | null } {
   if (!startDateStr) return { start: '', end: null };
   const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   
   const start = new Date(startDateStr + 'T00:00:00');
   const startDay = weekdays[start.getDay()] || '';
-  const startFormatted = `${startDateStr} (${startDay})`;
+  const startSlash = startDateStr.replace(/-/g, '/');
+  const startFormatted = `${startSlash}(${startDay})`;
 
   if (!endDateStr || endDateStr === startDateStr) {
     return { start: startFormatted, end: null };
@@ -147,7 +150,8 @@ export function formatTwoLineDate(startDateStr: string, endDateStr: string): { s
 
   const end = new Date(endDateStr + 'T00:00:00');
   const endDay = weekdays[end.getDay()] || '';
-  const endFormatted = `~ ${endDateStr} (${endDay})`;
+  const endSlash = endDateStr.replace(/-/g, '/');
+  const endFormatted = `~ ${endSlash}(${endDay})`;
 
   return { start: startFormatted, end: endFormatted };
 }

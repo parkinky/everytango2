@@ -70,18 +70,6 @@ export const FilterBar: React.FC<FilterBarProps> = ({ currentLang }) => {
           </div>
 
           <button
-            id="filter-range-6m-btn"
-            onClick={() => setFilters(prev => ({ ...prev, date_quick_range: '6m' }))}
-            className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
-              filters.date_quick_range === '6m'
-                ? 'bg-gray-900 text-white shadow-xs'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
-          >
-            {t.filter.sixMonths}
-          </button>
-
-          <button
             id="filter-range-1m-btn"
             onClick={() => setFilters(prev => ({ ...prev, date_quick_range: '1m' }))}
             className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
@@ -103,6 +91,18 @@ export const FilterBar: React.FC<FilterBarProps> = ({ currentLang }) => {
             }`}
           >
             {t.filter.threeMonths}
+          </button>
+
+          <button
+            id="filter-range-6m-btn"
+            onClick={() => setFilters(prev => ({ ...prev, date_quick_range: '6m' }))}
+            className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
+              filters.date_quick_range === '6m'
+                ? 'bg-gray-900 text-white shadow-xs'
+                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            }`}
+          >
+            {t.filter.sixMonths}
           </button>
 
           <button
@@ -220,17 +220,19 @@ export const FilterBar: React.FC<FilterBarProps> = ({ currentLang }) => {
             {t.filter.allTypes}
           </button>
 
-          {(['FESTIVAL', 'MARATHON', 'ENCUENTRO', 'MILONGA'] as EventType[]).map((type) => {
+          {(['FESTIVAL', 'MARATHON', 'ENCUENTRO', 'WORKSHOP', 'MILONGA'] as EventType[]).map((type) => {
             const isSelected = filters.types.includes(type);
             const label = 
               type === 'FESTIVAL' ? t.filter.festival :
               type === 'MARATHON' ? t.filter.marathon :
-              type === 'ENCUENTRO' ? t.filter.encuentro : t.filter.milonga;
+              type === 'ENCUENTRO' ? t.filter.encuentro :
+              type === 'WORKSHOP' ? t.filter.workshop : t.filter.milonga;
 
             const selectedClass = 
               type === 'FESTIVAL' ? 'bg-red-100 text-red-700 border-red-200 font-bold' :
               type === 'MARATHON' ? 'bg-blue-100 text-blue-700 border-blue-200 font-bold' :
               type === 'ENCUENTRO' ? 'bg-purple-100 text-purple-700 border-purple-200 font-bold' :
+              type === 'WORKSHOP' ? 'bg-amber-100 text-amber-800 border-amber-200 font-bold' :
               'bg-green-100 text-green-700 border-green-200 font-bold';
 
             return (

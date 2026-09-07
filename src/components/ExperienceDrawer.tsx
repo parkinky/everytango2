@@ -299,7 +299,7 @@ export const ExperienceDrawer: React.FC<ExperienceDrawerProps> = ({
                       key={exp.id}
                       className="bg-white border border-gray-200 rounded-xl p-5 shadow-xs space-y-3"
                     >
-                      {/* Author ID & Metadata Bar (Specification Requirement: 작성자 ID, 작성일자 포함) */}
+                      {/* Author ID & Metadata Bar (Specification Requirement: Author ID and Created Date) */}
                       <div className="flex items-start justify-between gap-3 border-b border-gray-100 pb-3">
                         <div className="flex items-center gap-2.5">
                           <div className="w-8 h-8 rounded-full bg-gray-100 border border-gray-200 text-gray-700 flex items-center justify-center text-xs font-extrabold uppercase">

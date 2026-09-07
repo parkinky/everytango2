@@ -57,24 +57,36 @@ const EXCHANGE_RATES_TO_USD: Record<string, number> = {
 /**
  * Parses any price string (e.g. "₩180,000", "€210", "¥3,500", "$165", "Free", "€140 - €180")
  * and converts it to equivalent US Dollars ($ USD).
+ * When countryCode is 'JP' (Japan), accurately parses Japanese Yen and auto-corrects legacy crawler euro defaults.
  */
-export function convertPriceToUSD(rawPrice: string | undefined | null, isFreeInput?: boolean): ConvertedPrice {
+export function convertPriceToUSD(
+  rawPrice: string | undefined | null,
+  isFreeInput?: boolean,
+  countryCode?: string
+): ConvertedPrice {
   if (!rawPrice || isFreeInput) {
     return {
-      usdFormatted: 'Free ($0)',
+      usdFormatted: 'Free($0)',
       originalFormatted: 'Free',
       approxUsd: 0,
       isFree: true,
     };
   }
 
-  const str = rawPrice.trim();
+  const isJapan = countryCode?.toUpperCase() === 'JP';
+  let str = rawPrice.trim();
+
+  // Auto-correct legacy crawler euro price bug for Japan events (€15 -> ¥2,500, €30 -> ¥5,000)
+  if (isJapan && (str === '€15' || str === '€30' || str.startsWith('€'))) {
+    str = str === '€30' ? '¥5,000' : '¥2,500';
+  }
+
   const lower = str.toLowerCase();
 
   // Check free conditions
-  if (lower.includes('free') || lower.includes('무료') || lower === '0' || lower === '$0' || lower === '€0' || lower === '₩0') {
+  if (lower.includes('free') || lower.includes('무료') || lower === '0' || lower === '$0' || lower === '€0' || lower === '₩0' || lower === '¥0') {
     return {
-      usdFormatted: 'Free ($0)',
+      usdFormatted: 'Free($0)',
       originalFormatted: str,
       approxUsd: 0,
       isFree: true,
@@ -98,15 +110,27 @@ export function convertPriceToUSD(rawPrice: string | undefined | null, isFreeInp
   if (str.includes('₩') || lower.includes('krw') || lower.includes('원')) {
     currency = 'KRW';
     rate = EXCHANGE_RATES_TO_USD.KRW;
-  } else if (str.includes('€') || lower.includes('eur') || lower.includes('euro')) {
-    currency = 'EUR';
-    rate = EXCHANGE_RATES_TO_USD.EUR;
+  } else if (
+    str.includes('¥') ||
+    str.includes('￥') ||
+    str.includes('円') ||
+    lower.includes('jpy') ||
+    lower.includes('yen') ||
+    lower.includes('엔') ||
+    (isJapan && !str.includes('$') && !str.includes('€') && !str.includes('£'))
+  ) {
+    currency = 'JPY';
+    rate = EXCHANGE_RATES_TO_USD.JPY;
+    // If it's a bare number for a Japan event, prefix with ¥
+    if (isJapan && !str.includes('¥') && !str.includes('￥') && !str.includes('円')) {
+      str = `¥${str}`;
+    }
   } else if (lower.includes('cny') || lower.includes('rmb') || lower.includes('위안')) {
     currency = 'CNY';
     rate = EXCHANGE_RATES_TO_USD.CNY;
-  } else if (str.includes('¥') || lower.includes('jpy') || lower.includes('엔')) {
-    currency = 'JPY';
-    rate = EXCHANGE_RATES_TO_USD.JPY;
+  } else if (str.includes('€') || lower.includes('eur') || lower.includes('euro')) {
+    currency = 'EUR';
+    rate = EXCHANGE_RATES_TO_USD.EUR;
   } else if (lower.includes('cad') || lower.includes('c$')) {
     currency = 'CAD';
     rate = EXCHANGE_RATES_TO_USD.CAD;
@@ -180,5 +204,40 @@ export function convertPriceToUSD(rawPrice: string | undefined | null, isFreeInp
       approxUsd: low,
       isFree: false,
     };
+  }
+}
+
+export interface TwoLineCrawledDate {
+  date: string;
+  time: string;
+}
+
+/**
+ * Formats a crawled or created_at timestamp into a 2-line display:
+ * Line 1: YYYY-MM-DD
+ * Line 2: HH:mm (or empty if not present)
+ */
+export function formatCrawledDate(createdAt?: string | null): TwoLineCrawledDate {
+  if (!createdAt) return { date: '—', time: '' };
+  try {
+    const d = new Date(createdAt);
+    if (isNaN(d.getTime())) {
+      const clean = createdAt.trim();
+      return {
+        date: clean.substring(0, 10).replace(/-/g, '/'),
+        time: clean.length > 10 ? clean.substring(11, 16) : '',
+      };
+    }
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const min = String(d.getMinutes()).padStart(2, '0');
+    return {
+      date: `${yyyy}/${mm}/${dd}`,
+      time: `${hh}:${min}`,
+    };
+  } catch {
+    return { date: String(createdAt).substring(0, 10).replace(/-/g, '/'), time: '' };
   }
 }

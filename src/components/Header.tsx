@@ -80,25 +80,7 @@ export const Header: React.FC<HeaderProps> = ({
                   : 'text-gray-500 hover:text-gray-900'
               }`}
             >
-              <PlusCircle className="w-4 h-4 text-gray-500" />
-              <span className="hidden xs:inline">{t.nav.submitEvent}</span>
-            </button>
-
-            {/* Admin Dashboard Tab */}
-            <button
-              id="nav-btn-admin"
-              onClick={() => onNavigate('admin')}
-              className={`h-16 flex items-center gap-1.5 px-2 sm:px-3 text-sm font-medium transition-all ${
-                activeTab === 'admin'
-                  ? 'text-gray-900 border-b-2 border-red-600 font-bold'
-                  : 'text-gray-500 hover:text-gray-900'
-              }`}
-            >
-              <ShieldCheck className="w-4 h-4 text-gray-500" />
-              <span className="hidden md:inline">{t.nav.adminDashboard}</span>
-              {isAdmin && (
-                <span className="w-2 h-2 rounded-full bg-red-600" />
-              )}
+              <span className="whitespace-nowrap">Upload Event Manually +</span>
             </button>
           </nav>
 

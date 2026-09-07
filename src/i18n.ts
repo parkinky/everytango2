@@ -30,6 +30,7 @@ export interface TranslationDict {
     festival: string;
     marathon: string;
     encuentro: string;
+    workshop: string;
     milonga: string;
     searchEvent: string;
     searchPlaceholder: string;
@@ -61,6 +62,7 @@ export interface TranslationDict {
     price: string;
     locationAndAddress: string;
     priceUsd: string;
+    crawledDate: string;
     sortBy: string;
     sortByDate: string;
     sortByName: string;
@@ -92,9 +94,12 @@ export interface TranslationDict {
     hasAccount: string;
     registerTitle: string;
     registerSubtitle: string;
+    firstName: string;
+    lastName: string;
     username: string;
     email: string;
     country: string;
+    state: string;
     phone: string;
     selectCountry: string;
     securityQuestionsTitle: string;
@@ -110,6 +115,8 @@ export interface TranslationDict {
     foundIdMessage: string;
     findPwTitle: string;
     findPwDesc: string;
+    randomQuestionNotice: string;
+    tryAnotherQuestion: string;
     verifyAnswersBtn: string;
     resetPwTitle: string;
     newPassword: string;
@@ -209,7 +216,7 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       allRange: "All Upcoming",
       oneMonth: "Next 1 Month",
       threeMonths: "Next 3 Months",
-      sixMonths: "Next 6 Months (+6M)",
+      sixMonths: "Next 6 Months",
       customRange: "Custom Range",
       startDate: "From",
       endDate: "To",
@@ -218,6 +225,7 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       festival: "Festival",
       marathon: "Marathon",
       encuentro: "Encuentro",
+      workshop: "Workshop",
       milonga: "Milonga",
       searchEvent: "Event Name",
       searchPlaceholder: "e.g. Atlanta, Seoul, Buenos Aires...",
@@ -248,7 +256,8 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       address: "Address",
       price: "Price",
       locationAndAddress: "Location & Address",
-      priceUsd: "Price (USD)",
+      priceUsd: "Price",
+      crawledDate: "Crawled Date",
       sortBy: "Sort:",
       sortByDate: "Date",
       sortByName: "Name",
@@ -280,9 +289,12 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       hasAccount: "Already have an account?",
       registerTitle: "Create Everytango Account",
       registerSubtitle: "Join our global community and submit tango events",
+      firstName: "First Name",
+      lastName: "Last Name",
       username: "Username (ID)",
       email: "Email Address",
       country: "Country of Residence",
+      state: "State / Province",
       phone: "Phone Number",
       selectCountry: "Select Country",
       securityQuestionsTitle: "Mandatory Security Questions (Account Recovery)",
@@ -297,8 +309,10 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       findIdBtn: "Retrieve ID",
       foundIdMessage: "Your registered username is:",
       findPwTitle: "Recover Account Password",
-      findPwDesc: "Enter your username and email to answer your 3 security questions.",
-      verifyAnswersBtn: "Verify Answers",
+      findPwDesc: "Enter your username or email to answer a randomly selected security question.",
+      randomQuestionNotice: "1 question was randomly selected from your 3 security questions. Enter your registered answer.",
+      tryAnotherQuestion: "Try another question",
+      verifyAnswersBtn: "Verify Answer & Continue",
       resetPwTitle: "Reset Password",
       newPassword: "New Password",
       confirmPassword: "Confirm New Password",
@@ -320,8 +334,8 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       state: "State / Province",
       address: "Street Address *",
       price: "Price / Admission Fee *",
-      priceHelp: "e.g. $150, €90, ₩45,000, or Free",
-      sourceUrl: "Official Website or Registration URL *",
+      priceHelp: "e.g. $150, €90, ₩45,000, ¥3,500, or Free",
+      sourceUrl: "Official Website or Registration URL (Optional)",
       notes: "Additional Details & Schedule Notes",
       submitBtn: "Submit Event for Approval",
       submitting: "Submitting...",
@@ -393,9 +407,9 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
     filter: {
       quickRange: "조회 범위 퀵 필터",
       allRange: "전체 예정 일정",
-      oneMonth: "오늘 ~ +1개월",
+      oneMonth: "오늘 ~ +1개월 (기본)",
       threeMonths: "오늘 ~ +3개월",
-      sixMonths: "오늘 ~ +6개월 (기본)",
+      sixMonths: "오늘 ~ +6개월",
       customRange: "달력 직접 선택",
       startDate: "시작일",
       endDate: "종료일",
@@ -404,6 +418,7 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       festival: "페스티벌 (Festival)",
       marathon: "마라톤 (Marathon)",
       encuentro: "엥꾸엔뜨로 (Encuentro)",
+      workshop: "워크샵 (Workshop)",
       milonga: "밀롱가 (Milonga)",
       searchEvent: "이벤트명 검색",
       searchPlaceholder: "이벤트명 검색 (자동완성)",
@@ -434,7 +449,8 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       address: "Address / 도로명 주소",
       price: "Price / 가격",
       locationAndAddress: "장소 / 주소",
-      priceUsd: "가격 (USD)",
+      priceUsd: "PRICE",
+      crawledDate: "검색된 일자",
       sortBy: "정렬 기준:",
       sortByDate: "날짜순",
       sortByName: "이름순",
@@ -466,9 +482,12 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       hasAccount: "이미 계정이 있으신가요?",
       registerTitle: "Everytango 회원가입",
       registerSubtitle: "전 세계 탱고 커뮤니티에 참여하고 이벤트를 직접 등록하세요.",
+      firstName: "이름 (First Name)",
+      lastName: "성 (Last Name)",
       username: "아이디 (ID)",
       email: "이메일 주소",
       country: "거주 국가",
+      state: "주 / 도 (State)",
       phone: "전화번호",
       selectCountry: "국가 선택",
       securityQuestionsTitle: "필수 보안 질문 3종 (계정 복구용)",
@@ -483,8 +502,10 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       findIdBtn: "아이디 조회",
       foundIdMessage: "회원님의 아이디는 다음과 같습니다:",
       findPwTitle: "비밀번호 찾기 및 재설정",
-      findPwDesc: "아이디와 이메일을 입력한 후 보안 질문 3개에 답변하세요.",
-      verifyAnswersBtn: "보안 답변 확인",
+      findPwDesc: "아이디나 이메일을 입력한 후, 등록된 3가지 보안 질문 중 무작위로 출제된 1개에 답변하세요.",
+      randomQuestionNotice: "보안을 위해 등록된 3가지 보안 질문 중 1가지가 무작위로 출제되었습니다. 정확한 답변을 입력해 주세요.",
+      tryAnotherQuestion: "다른 질문 받기",
+      verifyAnswersBtn: "보안 답변 확인 및 재설정",
       resetPwTitle: "새 비밀번호 설정",
       newPassword: "새 비밀번호",
       confirmPassword: "새 비밀번호 확인",
@@ -506,8 +527,8 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       state: "주 / 행정구역",
       address: "상세 도로명 주소 *",
       price: "참가비 / 티켓 금액 *",
-      priceHelp: "예: $150, €100, ₩50,000 또는 Free",
-      sourceUrl: "공식 웹사이트 또는 등록 페이지 링크 *",
+      priceHelp: "예: $150, €100, ₩50,000, ¥3,500 또는 Free",
+      sourceUrl: "공식 웹사이트 또는 등록 페이지 링크 (선택)",
       notes: "추가 일정 및 참고 사항",
       submitBtn: "승인 신청 제출",
       submitting: "제출 중...",
@@ -579,9 +600,9 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
     filter: {
       quickRange: "Rango Rápido",
       allRange: "Todos los Próximos",
-      oneMonth: "+1 Mes",
+      oneMonth: "+1 Mes (Predeterminado)",
       threeMonths: "+3 Meses",
-      sixMonths: "+6 Meses (Predeterminado)",
+      sixMonths: "+6 Meses",
       customRange: "Rango Personalizado",
       startDate: "Desde",
       endDate: "Hasta",
@@ -590,6 +611,7 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       festival: "Festival",
       marathon: "Marathon",
       encuentro: "Encuentro",
+      workshop: "Taller (Workshop)",
       milonga: "Milonga",
       searchEvent: "Nombre del Evento",
       searchPlaceholder: "ej. Buenos Aires, Madrid...",
@@ -620,7 +642,8 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       address: "Dirección",
       price: "Precio",
       locationAndAddress: "Lugar y Dirección",
-      priceUsd: "Precio (USD)",
+      priceUsd: "Precio",
+      crawledDate: "Fecha de Rastreo",
       sortBy: "Ordenar por:",
       sortByDate: "Fecha",
       sortByName: "Nombre",
@@ -652,9 +675,12 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       hasAccount: "¿Ya tienes cuenta?",
       registerTitle: "Crear Cuenta Everytango",
       registerSubtitle: "Únete a la comunidad y publica eventos",
+      firstName: "Nombre (First Name)",
+      lastName: "Apellido (Last Name)",
       username: "Nombre de Usuario (ID)",
       email: "Correo Electrónico",
       country: "País de Residencia",
+      state: "Estado / Provincia (State)",
       phone: "Teléfono",
       selectCountry: "Seleccionar País",
       securityQuestionsTitle: "Preguntas de Seguridad Obligatorias",
@@ -669,8 +695,10 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       findIdBtn: "Buscar Usuario",
       foundIdMessage: "Tu nombre de usuario es:",
       findPwTitle: "Restablecer Contraseña",
-      findPwDesc: "Ingresa tu usuario y correo para validar las preguntas.",
-      verifyAnswersBtn: "Verificar Respuestas",
+      findPwDesc: "Ingresa tu usuario o correo para responder 1 pregunta de seguridad seleccionada al azar.",
+      randomQuestionNotice: "Se seleccionó al azar 1 de tus 3 preguntas de seguridad. Escribe tu respuesta registrada.",
+      tryAnotherQuestion: "Probar otra pregunta",
+      verifyAnswersBtn: "Verificar Respuesta y Continuar",
       resetPwTitle: "Nueva Contraseña",
       newPassword: "Nueva Contraseña",
       confirmPassword: "Confirmar Contraseña",
@@ -693,7 +721,7 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       address: "Dirección Calle *",
       price: "Precio / Entrada *",
       priceHelp: "ej. $150, €90 o Free",
-      sourceUrl: "Sitio Web o Inscripción Oficial *",
+      sourceUrl: "Sitio Web o Inscripción Oficial (Opcional)",
       notes: "Notas adicionales y cronograma",
       submitBtn: "Enviar para Aprobación",
       submitting: "Enviando...",
@@ -765,9 +793,9 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
     filter: {
       quickRange: "期間クイック選択",
       allRange: "すべて",
-      oneMonth: "今後1ヶ月",
+      oneMonth: "今後1ヶ月 (標準)",
       threeMonths: "今後3ヶ月",
-      sixMonths: "今後6ヶ月 (標準)",
+      sixMonths: "今後6ヶ月",
       customRange: "期間指定",
       startDate: "開始日",
       endDate: "終了日",
@@ -776,6 +804,7 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       festival: "フェスティバル",
       marathon: "マラソン",
       encuentro: "エンクエントロ",
+      workshop: "ワークショップ (Workshop)",
       milonga: "ミロンガ",
       searchEvent: "イベント名",
       searchPlaceholder: "イベント名を検索",
@@ -806,7 +835,8 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       address: "所在地・住所",
       price: "料金",
       locationAndAddress: "場所 / 住所",
-      priceUsd: "料金 (USD)",
+      priceUsd: "料金",
+      crawledDate: "検索された日",
       sortBy: "並べ替え:",
       sortByDate: "日付順",
       sortByName: "名前順",
@@ -838,9 +868,12 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       hasAccount: "既にアカウントをお持ちの方",
       registerTitle: "新規アカウント登録",
       registerSubtitle: "世界中のタンゴ愛好家とつながり、イベントを登録できます。",
+      firstName: "名 (First Name)",
+      lastName: "姓 (Last Name)",
       username: "ユーザー名 (ID)",
       email: "メールアドレス",
       country: "居住国",
+      state: "州 / 都道府県 (State)",
       phone: "電話番号",
       selectCountry: "国を選択",
       securityQuestionsTitle: "秘密の質問 3問 (アカウント復旧用)",
@@ -855,8 +888,10 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       findIdBtn: "IDを確認",
       foundIdMessage: "ご登録のユーザーIDは:",
       findPwTitle: "パスワードの再設定",
-      findPwDesc: "ユーザー名とメールアドレスを入力し、秘密の質問にお答えください。",
-      verifyAnswersBtn: "質問に回答して確認",
+      findPwDesc: "ユーザー名またはメールアドレスを入力し、登録された3つの質問からランダムな1問にお答えください。",
+      randomQuestionNotice: "登録された3つの質問から1問がランダムに出題されました。登録した回答を入力してください。",
+      tryAnotherQuestion: "別の質問に変更",
+      verifyAnswersBtn: "回答を確認して次へ",
       resetPwTitle: "新しいパスワードを設定",
       newPassword: "新しいパスワード",
       confirmPassword: "新しいパスワード (確認)",
@@ -879,7 +914,7 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       address: "詳細住所 *",
       price: "参加費・チケット *",
       priceHelp: "例: $150, ¥5000, Free",
-      sourceUrl: "公式サイト・登録URL *",
+      sourceUrl: "公式サイト・登録URL（任意）",
       notes: "特記事項・スケジュール",
       submitBtn: "承認申請を送信",
       submitting: "送信中...",
@@ -951,9 +986,9 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
     filter: {
       quickRange: "快捷日期范围",
       allRange: "全部日程",
-      oneMonth: "未来 1 个月",
+      oneMonth: "未来 1 个月 (默认)",
       threeMonths: "未来 3 个月",
-      sixMonths: "未来 6 个月 (+6M 默认)",
+      sixMonths: "未来 6 个月",
       customRange: "自定义日期",
       startDate: "开始日期",
       endDate: "结束日期",
@@ -962,6 +997,7 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       festival: "探戈节 (Festival)",
       marathon: "马拉松 (Marathon)",
       encuentro: "Encuentro",
+      workshop: "工作坊 (Workshop)",
       milonga: "舞会 (Milonga)",
       searchEvent: "活动名称",
       searchPlaceholder: "输入活动名称搜索",
@@ -992,7 +1028,8 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       address: "详细地址",
       price: "票价",
       locationAndAddress: "地点与地址",
-      priceUsd: "费用 (USD)",
+      priceUsd: "费用",
+      crawledDate: "搜索日期",
       sortBy: "排序方式:",
       sortByDate: "按日期",
       sortByName: "按名称",
@@ -1024,9 +1061,12 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       hasAccount: "已有账号？",
       registerTitle: "创建 Everytango 账号",
       registerSubtitle: "加入全球探戈社区并发布活动",
+      firstName: "名 (First Name)",
+      lastName: "姓 (Last Name)",
       username: "用户名 (ID)",
       email: "电子邮箱",
       country: "常住国家",
+      state: "州 / 省 (State)",
       phone: "手机号码",
       selectCountry: "选择国家",
       securityQuestionsTitle: "必填安全密保问题 (账号找回专用)",
@@ -1041,8 +1081,10 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       findIdBtn: "查询用户名",
       foundIdMessage: "您注册的用户名是：",
       findPwTitle: "找回与重置密码",
-      findPwDesc: "输入用户名和邮箱，验证3个密保问题。",
-      verifyAnswersBtn: "验证答案",
+      findPwDesc: "输入用户名或邮箱，回答系统从3个密保问题中随机抽取的1题。",
+      randomQuestionNotice: "已从您注册的3个密保问题中随机抽取1题，请输入您当时设置的答案。",
+      tryAnotherQuestion: "换一个问题",
+      verifyAnswersBtn: "验证答案并继续",
       resetPwTitle: "重设新密码",
       newPassword: "新密码",
       confirmPassword: "确认新密码",
@@ -1065,7 +1107,7 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       address: "详细街道地址 *",
       price: "票价 / 门票 *",
       priceHelp: "例如: $150, ¥800 或 Free",
-      sourceUrl: "官方网站或报名链接 *",
+      sourceUrl: "官方网站或报名链接（选填）",
       notes: "日程详情与备注",
       submitBtn: "提交审核",
       submitting: "提交中...",
