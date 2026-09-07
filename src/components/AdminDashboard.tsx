@@ -47,6 +47,7 @@ import { useSiteConfig } from '../context/SiteConfigContext';
 import { formatTwoLineDate } from '../utils/dedup';
 import { formatTwoLineAddress, convertPriceToUSD, formatCrawledDate, formatDateToCST, formatDateTimeToCST } from '../utils/formatters';
 import { exportEventsToExcel } from '../utils/excelExport';
+import { EventSourceLink } from './EventSourceLink';
 
 interface AdminDashboardProps {
   currentLang: SupportedLanguage;
@@ -1299,17 +1300,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                           <td className="py-2.5 px-3 font-bold text-gray-900 align-middle">
                             <div className="flex items-center gap-1.5 min-w-0">
                               <span className="truncate block" title={ev.event_name}>{ev.event_name}</span>
-                              {ev.source_url && (
-                                <a
-                                  href={ev.source_url}
-                                  target="_blank"
-                                  rel="noreferrer noopener"
-                                  className="text-gray-400 hover:text-red-600 shrink-0"
-                                  title="Open source URL"
-                                >
-                                  <ExternalLink className="w-3 h-3" />
-                                </a>
-                              )}
+                              <EventSourceLink event={ev} showDropdown={false} />
                             </div>
                           </td>
 

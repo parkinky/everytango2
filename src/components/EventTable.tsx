@@ -18,6 +18,7 @@ import { translations } from '../i18n';
 import { formatDateRange, formatTwoLineDate } from '../utils/dedup';
 import { formatTwoLineAddress, convertPriceToUSD, formatCrawledDate } from '../utils/formatters';
 import { useAuth } from '../context/AuthContext';
+import { EventSourceLink } from './EventSourceLink';
 
 interface EventTableProps {
   events: TangoEvent[];
@@ -315,21 +316,7 @@ export const EventTable: React.FC<EventTableProps> = ({ events, currentLang, onE
                   {/* Details Link & Share */}
                   <td className="py-2.5 px-1.5 whitespace-nowrap text-center align-middle">
                     <div className="flex items-center justify-center gap-1">
-                      {ev.source_url ? (
-                        <a
-                          href={ev.source_url}
-                          target="_blank"
-                          rel="noreferrer noopener"
-                          title={t.table.viewOfficial}
-                          className="text-red-600 hover:text-red-700 font-semibold text-xs hover:underline inline-flex items-center gap-0.5 p-1 rounded hover:bg-red-50 transition-colors"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5" />
-                        </a>
-                      ) : (
-                        <span className="p-1 text-gray-300 inline-flex items-center" title="No link provided">
-                          <ExternalLink className="w-3.5 h-3.5 opacity-30" />
-                        </span>
-                      )}
+                      <EventSourceLink event={ev} />
                       <button
                         onClick={() => copyEventShare(ev)}
                         title={copiedId === ev.id ? t.table.copied : t.table.share}
@@ -465,21 +452,7 @@ export const EventTable: React.FC<EventTableProps> = ({ events, currentLang, onE
                     </button>
                   )}
                 </div>
-                {ev.source_url ? (
-                  <a
-                    href={ev.source_url}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    className="inline-flex items-center gap-1 text-red-600 hover:text-red-700 font-semibold hover:underline"
-                  >
-                    <span>{t.table.viewOriginal}</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
-                ) : (
-                  <span className="text-gray-400 text-xs italic">
-                    No website link
-                  </span>
-                )}
+                <EventSourceLink event={ev} label={t.table.viewOriginal} />
               </div>
             </div>
           );

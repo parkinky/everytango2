@@ -29,6 +29,7 @@ import {
 } from '../data/facebookCommunities';
 import { isDuplicateEvent, formatDateRange } from '../utils/dedup';
 import { formatDateToCST } from '../utils/formatters';
+import { resolveDirectSourceUrl } from '../utils/sourceUrlResolver';
 
 interface FacebookSearchModalProps {
   isOpen: boolean;
@@ -795,17 +796,26 @@ export const FacebookSearchModal: React.FC<FacebookSearchModalProps> = ({
 
                       {/* Actions */}
                       <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
-                        {ev.source_url && (
-                          <a
-                            href={ev.source_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="p-1.5 text-stone-400 hover:text-blue-600 dark:hover:text-blue-400 rounded-lg hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors"
-                            title="페이스북 원문 보기"
-                          >
-                            <ExternalLink className="w-4 h-4" />
-                          </a>
-                        )}
+                        {ev.source_url && (() => {
+                          const directUrl = resolveDirectSourceUrl({
+                            source_url: ev.source_url,
+                            event_name: ev.event_name,
+                            city: ev.city,
+                            country_code: ev.country_code,
+                            start_date: ev.start_date,
+                          }).primaryUrl;
+                          return (
+                            <a
+                              href={directUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="p-1.5 text-stone-400 hover:text-blue-600 dark:hover:text-blue-400 rounded-lg hover:bg-stone-100 dark:hover:bg-stone-800 transition-colors"
+                              title="페이스북 검색 자료 바로가기"
+                            >
+                              <ExternalLink className="w-4 h-4" />
+                            </a>
+                          );
+                        })()}
 
                         <button
                           onClick={() => handleAddSingleEvent(ev)}

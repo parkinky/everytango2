@@ -18,7 +18,15 @@ service cloud.firestore {
     // User profile documents
     match /users/{userId} {
       allow read: if true;
-      allow create, update: if request.auth != null && request.auth.uid == userId;
+      // NOTE: custom (non-Google) sign-up never authenticates with Firebase
+      // Auth, so request.auth is always null for that create call. Requiring
+      // auth on create broke every custom registration's Firestore write
+      // (it silently fell back to localStorage only, which is why some users
+      // could not sign in from a different browser/device). create is now
+      // open; update/delete stay restricted to the account's own owner once
+      // signed in.
+      allow create: if true;
+      allow update: if request.auth != null && request.auth.uid == userId;
       allow delete: if request.auth != null && request.auth.uid == userId;
     }
 

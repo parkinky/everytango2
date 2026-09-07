@@ -19,6 +19,7 @@ import { formatDateToCST } from '../utils/formatters';
 import { DEFAULT_CRAWLING_CHANNELS } from './SiteConfigContext';
 import { sendApprovalNotificationEmail, EmailLog } from '../services/emailService';
 import { repairAndNormalizeEvent, getAuthenticVenueForCity } from '../utils/authenticVenues';
+import { resolveDirectSourceUrl } from '../utils/sourceUrlResolver';
 
 interface EventsContextType {
   events: TangoEvent[];
@@ -609,10 +610,18 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           recentCreatedAt = new Date(now.getTime() - daysAgo * 24 * 60 * 60 * 1000).toISOString();
         }
 
+        const resolvedCandidateUrl = resolveDirectSourceUrl({
+          source_url: feedEvt.source_url || matchedChannel.url,
+          event_name: feedEvt.event_name,
+          city: feedEvt.city,
+          country_code: feedEvt.country_code,
+          start_date: feedEvt.start_date,
+        }).primaryUrl;
+
         candidatesPool.push({
           ...feedEvt,
           status: 'PENDING' as EventStatus, // Sent to Pending Approval list
-          source_url: matchedChannel.url || feedEvt.source_url,
+          source_url: resolvedCandidateUrl,
           source_type: 'AUTO_CRAWLED',
           submitted_by: `Crawler (${matchedChannel.name})`,
           submitted_by_name: matchedChannel.name,
@@ -659,6 +668,14 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const alreadyInPool = candidatesPool.some((c) => c.submitted_by_name === channel.name && c.event_name === eventTitle);
         if (!alreadyInPool) {
           const authenticVenue = getAuthenticVenueForCity(cityName, stateName, countryCode, eventTitle);
+          const directCrawlUrl = resolveDirectSourceUrl({
+            source_url: channel.url,
+            event_name: eventTitle,
+            city: authenticVenue.city,
+            country_code: authenticVenue.countryCode,
+            start_date: eventStart,
+          }).primaryUrl;
+
           candidatesPool.push({
             id: 'crawl_' + Math.random().toString(36).substring(2, 9),
             event_name: eventTitle,
@@ -671,7 +688,7 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             address: authenticVenue.address,
             price: tmpl.price,
             is_free: false,
-            source_url: channel.url,
+            source_url: directCrawlUrl,
             source_type: 'AUTO_CRAWLED',
             status: 'PENDING' as EventStatus, // 승인대상 목록 (Pending Approval)
             submitted_by: `Crawler (${channel.name})`,

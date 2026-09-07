@@ -1,5 +1,6 @@
 import { TangoEvent, EventType } from '../types';
 import { getDefaultPriceByCountryAndType } from '../context/EventsContext';
+import { resolveDirectSourceUrl } from './sourceUrlResolver';
 
 export interface AuthenticVenue {
   name: string;
@@ -668,6 +669,22 @@ export function repairAndNormalizeEvent(ev: TangoEvent): { event: TangoEvent; ch
     }
   }
 
+  // 4. Normalize and repair source_url (e.g. resolve generic Facebook group URLs to in-group search URLs)
+  let fixedSourceUrl = ev.source_url;
+  if (ev.source_url) {
+    const resolvedLink = resolveDirectSourceUrl({
+      source_url: ev.source_url,
+      event_name: ev.event_name,
+      city: fixedCity,
+      country_code: fixedCountry,
+      start_date: ev.start_date,
+    });
+    if (resolvedLink.isTransformed && resolvedLink.primaryUrl !== ev.source_url) {
+      fixedSourceUrl = resolvedLink.primaryUrl;
+      changed = true;
+    }
+  }
+
   if (!changed) {
     return { event: ev, changed: false };
   }
@@ -680,6 +697,7 @@ export function repairAndNormalizeEvent(ev: TangoEvent): { event: TangoEvent; ch
       country_code: fixedCountry,
       state: fixedState,
       price: fixedPrice,
+      source_url: fixedSourceUrl,
     },
     changed: true,
   };
