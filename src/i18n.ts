@@ -257,7 +257,7 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       price: "Price",
       locationAndAddress: "Location & Address",
       priceUsd: "Price",
-      crawledDate: "Crawled Date",
+      crawledDate: "Crawled",
       sortBy: "Sort:",
       sortByDate: "Date",
       sortByName: "Name",
@@ -450,7 +450,7 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       price: "Price / 가격",
       locationAndAddress: "장소 / 주소",
       priceUsd: "PRICE",
-      crawledDate: "검색된 일자",
+      crawledDate: "CRAWLED",
       sortBy: "정렬 기준:",
       sortByDate: "날짜순",
       sortByName: "이름순",
@@ -1197,4 +1197,5 @@ export const COUNTRY_LIST: { code: string; name: string }[] = [
   { code: "CN", name: "China (CN)" },
   { code: "TW", name: "Taiwan (TW)" },
   { code: "SG", name: "Singapore (SG)" },
+  { code: "SI", name: "Slovenia (SI)" },
 ];

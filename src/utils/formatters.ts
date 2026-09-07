@@ -1,4 +1,5 @@
 // Utility functions for formatting addresses, dates, and converting prices to USD
+import { getAuthenticVenueForCity } from './authenticVenues';
 
 export interface TwoLineAddress {
   locationLine: string; // Line 1: [KR] Seoul, Gangnam
@@ -18,10 +19,25 @@ export function formatTwoLineAddress(event: {
   city: string;
   state?: string | null;
   address: string;
+  event_name?: string;
 }): TwoLineAddress {
-  const country = (event.country_code || '').trim().toUpperCase();
-  const city = (event.city || '').trim();
-  const state = (event.state || '').trim();
+  let country = (event.country_code || '').trim().toUpperCase();
+  let city = (event.city || '').trim();
+  let state = (event.state || '').trim();
+  let address = (event.address || '').trim();
+
+  // Instant on-the-fly correction if a legacy generic placeholder is detected
+  if (
+    address.includes('100 Main Blvd') ||
+    address.includes('Argentine Tango Arts Hall') ||
+    (city.toLowerCase().includes('seoul') && country === 'US')
+  ) {
+    const venue = getAuthenticVenueForCity(city, state, country, event.event_name || city);
+    city = venue.city;
+    state = venue.state || state;
+    country = venue.countryCode;
+    address = venue.address;
+  }
   
   // Line 1: Country code badge & City/State
   let locationParts: string[] = [];
@@ -32,7 +48,7 @@ export function formatTwoLineAddress(event: {
   const locationLine = country ? `[${country}] ${locationText}` : locationText;
 
   // Line 2: Venue name or street address
-  const venueLine = (event.address || '').trim() || '—';
+  const venueLine = address || '—';
 
   return {
     locationLine,
@@ -213,9 +229,96 @@ export interface TwoLineCrawledDate {
 }
 
 /**
- * Formats a crawled or created_at timestamp into a 2-line display:
- * Line 1: YYYY-MM-DD
- * Line 2: HH:mm (or empty if not present)
+ * Formats a date into "YYYY/MM/DD" in CST (Central Standard Time, America/Chicago)
+ * Plain dates like "2026-09-09" are converted to "2026/09/09".
+ * ISO timestamps are converted to America/Chicago time and formatted as "YYYY/MM/DD".
+ */
+export function formatDateToCST(dateInput?: string | number | Date | null): string {
+  if (!dateInput) return '—';
+  const str = String(dateInput).trim();
+  if (str === '—' || str === '-' || str.toLowerCase() === 'none') return '—';
+
+  // If already plain YYYY-MM-DD or YYYY/MM/DD without time
+  if (/^\d{4}[-/]\d{2}[-/]\d{2}$/.test(str)) {
+    return str.replace(/-/g, '/');
+  }
+
+  try {
+    const d = new Date(str);
+    if (isNaN(d.getTime())) return str.substring(0, 10).replace(/-/g, '/');
+
+    const formatted = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Chicago',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(d);
+
+    return formatted.replace(/-/g, '/');
+  } catch {
+    return str.substring(0, 10).replace(/-/g, '/');
+  }
+}
+
+/**
+ * Formats time in CST (Central Standard Time, America/Chicago) with "(CST)" suffix
+ * e.g. "03:14:24 (CST)" or "03:14 (CST)"
+ */
+export function formatTimeToCST(
+  dateInput?: string | number | Date | null,
+  includeSeconds: boolean = false
+): string {
+  if (!dateInput) return '';
+  const str = String(dateInput).trim();
+  if (str === '—' || str === '-' || str.toLowerCase() === 'none') return '';
+
+  try {
+    const d = new Date(str);
+    if (isNaN(d.getTime())) return '';
+
+    const timeStr = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'America/Chicago',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: includeSeconds ? '2-digit' : undefined,
+      hour12: false,
+    }).format(d);
+
+    return `${timeStr} (CST)`;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Formats full datetime in CST (America/Chicago) with "YYYY/MM/DD HH:mm:ss (CST)"
+ */
+export function formatDateTimeToCST(
+  dateInput?: string | number | Date | null,
+  includeSeconds: boolean = true
+): string {
+  if (!dateInput) return 'None';
+  const str = String(dateInput).trim();
+  if (str === '—' || str === '-' || str.toLowerCase() === 'none') return 'None';
+
+  try {
+    const d = new Date(str);
+    if (isNaN(d.getTime())) return str.replace(/-/g, '/');
+
+    const dateStr = formatDateToCST(d);
+    const timeStr = formatTimeToCST(d, includeSeconds);
+
+    if (!timeStr) return dateStr;
+    return `${dateStr} ${timeStr}`;
+  } catch {
+    return str.replace(/-/g, '/');
+  }
+}
+
+/**
+ * Formats a crawled or created_at timestamp into a 2-line display in CST:
+ * Line 1: YYYY/MM/DD
+ * Line 2: HH:mm (CST)
  */
 export function formatCrawledDate(createdAt?: string | null): TwoLineCrawledDate {
   if (!createdAt) return { date: '—', time: '' };
@@ -225,17 +328,14 @@ export function formatCrawledDate(createdAt?: string | null): TwoLineCrawledDate
       const clean = createdAt.trim();
       return {
         date: clean.substring(0, 10).replace(/-/g, '/'),
-        time: clean.length > 10 ? clean.substring(11, 16) : '',
+        time: clean.length > 10 ? `${clean.substring(11, 16)} (CST)` : '',
       };
     }
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth() + 1).padStart(2, '0');
-    const dd = String(d.getDate()).padStart(2, '0');
-    const hh = String(d.getHours()).padStart(2, '0');
-    const min = String(d.getMinutes()).padStart(2, '0');
+    const dateFormatted = formatDateToCST(d);
+    const timeFormatted = formatTimeToCST(d, false);
     return {
-      date: `${yyyy}/${mm}/${dd}`,
-      time: `${hh}:${min}`,
+      date: dateFormatted,
+      time: timeFormatted,
     };
   } catch {
     return { date: String(createdAt).substring(0, 10).replace(/-/g, '/'), time: '' };

@@ -12,6 +12,7 @@ import {
 import { EventType, SupportedLanguage } from '../types';
 import { translations, COUNTRY_LIST } from '../i18n';
 import { useEvents } from '../context/EventsContext';
+import { useAuth } from '../context/AuthContext';
 import { exportEventsToExcel } from '../utils/excelExport';
 
 interface FilterBarProps {
@@ -27,6 +28,12 @@ export const FilterBar: React.FC<FilterBarProps> = ({ currentLang }) => {
     uniqueCities, 
     filteredEvents 
   } = useEvents();
+  const { userProfile, currentUser } = useAuth();
+  const isAdmin = Boolean(
+    userProfile?.role === 'ADMIN' || 
+    currentUser?.email === 'parkinky@gmail.com' || 
+    userProfile?.username === 'parkinky'
+  );
 
   const [autocompleteOpen, setAutocompleteOpen] = useState(false);
   const [downloadSuccess, setDownloadSuccess] = useState(false);
@@ -47,6 +54,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({ currentLang }) => {
   const isAllTypesSelected = filters.types.length === 0;
 
   const handleExportExcel = () => {
+    if (!isAdmin) return;
     const success = exportEventsToExcel(filteredEvents);
     if (success) {
       setDownloadSuccess(true);
@@ -167,32 +175,34 @@ export const FilterBar: React.FC<FilterBarProps> = ({ currentLang }) => {
             )}
           </div>
 
-          {/* Excel Download Button */}
-          <button
-            id="excel-download-btn"
-            onClick={handleExportExcel}
-            title={t.filter.exportTooltip}
-            className={`group shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all shadow-2xs border ${
-              downloadSuccess
-                ? 'bg-emerald-600 border-emerald-600 text-white'
-                : 'bg-emerald-50 hover:bg-emerald-600 text-emerald-800 hover:text-white border-emerald-200 hover:border-emerald-600'
-            }`}
-          >
-            {downloadSuccess ? (
-              <>
-                <Check className="w-3.5 h-3.5 text-white animate-bounce" />
-                <span className="font-bold">{t.filter.downloadComplete}</span>
-              </>
-            ) : (
-              <>
-                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600 group-hover:text-white transition-colors" />
-                <span>{t.filter.exportExcel}</span>
-                <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-emerald-100 text-emerald-700 group-hover:bg-emerald-700 group-hover:text-white transition-colors">
-                  {filteredEvents.length}
-                </span>
-              </>
-            )}
-          </button>
+          {/* Excel Download Button (Admin Only) */}
+          {isAdmin && (
+            <button
+              id="excel-download-btn"
+              onClick={handleExportExcel}
+              title={t.filter.exportTooltip}
+              className={`group shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all shadow-2xs border ${
+                downloadSuccess
+                  ? 'bg-emerald-600 border-emerald-600 text-white'
+                  : 'bg-emerald-50 hover:bg-emerald-600 text-emerald-800 hover:text-white border-emerald-200 hover:border-emerald-600'
+              }`}
+            >
+              {downloadSuccess ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-white animate-bounce" />
+                  <span className="font-bold">{t.filter.downloadComplete}</span>
+                </>
+              ) : (
+                <>
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600 group-hover:text-white transition-colors" />
+                  <span>{t.filter.exportExcel}</span>
+                  <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-emerald-100 text-emerald-700 group-hover:bg-emerald-700 group-hover:text-white transition-colors">
+                    {filteredEvents.length}
+                  </span>
+                </>
+              )}
+            </button>
+          )}
         </div>
 
       </div>

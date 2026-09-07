@@ -40,12 +40,12 @@ import {
   Mail
 } from 'lucide-react';
 import { SupportedLanguage, TangoEvent, UserProfile, UserRole, EventType, EventStatus, CrawlingChannel } from '../types';
-import { translations } from '../i18n';
+import { translations, COUNTRY_LIST } from '../i18n';
 import { useEvents } from '../context/EventsContext';
 import { useAuth } from '../context/AuthContext';
 import { useSiteConfig } from '../context/SiteConfigContext';
 import { formatTwoLineDate } from '../utils/dedup';
-import { formatTwoLineAddress, convertPriceToUSD, formatCrawledDate } from '../utils/formatters';
+import { formatTwoLineAddress, convertPriceToUSD, formatCrawledDate, formatDateToCST, formatDateTimeToCST } from '../utils/formatters';
 import { exportEventsToExcel } from '../utils/excelExport';
 
 interface AdminDashboardProps {
@@ -63,8 +63,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
     deleteEvent, 
     addEventDirect,
     runWeeklyCrawler,
+    syncAuthenticVenues,
     stats 
   } = useEvents();
+
+  const [isSyncingVenues, setIsSyncingVenues] = useState(false);
 
   const { 
     userProfile, 
@@ -128,6 +131,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
   // --- USERS TAB STATE ---
   const [userList, setUserList] = useState<UserProfile[]>([]);
   const [userSearchQuery, setUserSearchQuery] = useState('');
+  const [userSortField, setUserSortField] = useState<'role' | 'username' | 'email' | 'phone' | 'created_at'>('role');
+  const [userSortAsc, setUserSortAsc] = useState<boolean>(true);
   const [selectedUserDetails, setSelectedUserDetails] = useState<UserProfile | null>(null);
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
   const [userEditForm, setUserEditForm] = useState({
@@ -190,6 +195,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
   const [isChannelModalOpen, setIsChannelModalOpen] = useState(false);
   const [editingChannel, setEditingChannel] = useState<CrawlingChannel | null>(null);
   const [channelSearchQuery, setChannelSearchQuery] = useState('');
+  const [channelSortField, setChannelSortField] = useState<'city' | 'country_code' | 'sourceType' | 'name' | 'url'>('city');
+  const [channelSortAsc, setChannelSortAsc] = useState<boolean>(true);
   const [channelForm, setChannelForm] = useState({
     name: '',
     url: '',
@@ -590,7 +597,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
         itemsAdded: res.addedCount,
         duplicatesBlocked: res.duplicateCount,
         durationMs: Date.now() - startTime,
-        message: `Crawl completed (${res.channelsCrawled?.length || 0} channels, 1-week window): ${res.addedCount} events sent to Pending Approval list (승인대상 목록), ${res.duplicateCount} duplicates blocked.`,
+        message: `Crawl completed (${res.channelsCrawled?.length || 0} channels, registered in past 1-week window): ${res.addedCount} events sent to Pending Approval list (승인대상 목록), ${res.duplicateCount} duplicates blocked.`,
       }, res.updatedChannels);
 
       // Auto-update Curated Notice automatically upon crawler completion
@@ -734,6 +741,122 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
       u.country_code.toLowerCase().includes(q)
     );
   });
+
+  // Helper to determine role rank: ADMIN=0, USER=1
+  const getUserRoleRank = (u: UserProfile) => {
+    return (u.role === 'ADMIN' || u.username === 'parkinky') ? 0 : 1;
+  };
+
+  // Sort users for User Management tab (Default: 1st Role, 2nd Joined)
+  const sortedUsers = useMemo(() => {
+    return [...filteredUsers].sort((a, b) => {
+      // 1. Role sorting (Default view or when Role header is clicked)
+      if (userSortField === 'role') {
+        const aRole = getUserRoleRank(a);
+        const bRole = getUserRoleRank(b);
+        if (aRole !== bRole) {
+          return userSortAsc ? (aRole - bRole) : (bRole - aRole);
+        }
+        // 2차 정렬: Joined (가입일자 오름차순: 과거 -> 최신)
+        const aJoined = a.created_at || '';
+        const bJoined = b.created_at || '';
+        if (aJoined && bJoined) {
+          const comp = aJoined.localeCompare(bJoined);
+          if (comp !== 0) return comp;
+        } else if (aJoined && !bJoined) {
+          return -1;
+        } else if (!aJoined && bJoined) {
+          return 1;
+        }
+        return (a.username || '').localeCompare(b.username || '');
+      }
+
+      let valA = '';
+      let valB = '';
+      if (userSortField === 'username') {
+        valA = (a.username || '').toLowerCase();
+        valB = (b.username || '').toLowerCase();
+      } else if (userSortField === 'email') {
+        valA = (a.email || '').toLowerCase();
+        valB = (b.email || '').toLowerCase();
+      } else if (userSortField === 'phone') {
+        valA = (a.phone || '').toLowerCase();
+        valB = (b.phone || '').toLowerCase();
+      } else if (userSortField === 'created_at') {
+        valA = a.created_at || '';
+        valB = b.created_at || '';
+      }
+
+      if (valA !== valB) {
+        if (valA < valB) return userSortAsc ? -1 : 1;
+        if (valA > valB) return userSortAsc ? 1 : -1;
+      }
+
+      // Tie-breaker: 1st Role, 2nd Joined (오름차순)
+      const aRole = getUserRoleRank(a);
+      const bRole = getUserRoleRank(b);
+      if (aRole !== bRole) return aRole - bRole;
+      return (a.created_at || '').localeCompare(b.created_at || '');
+    });
+  }, [filteredUsers, userSortField, userSortAsc]);
+
+  // Handle Channel column sorting
+  const handleChannelSort = (field: 'city' | 'country_code' | 'sourceType' | 'name' | 'url') => {
+    if (channelSortField === field) {
+      setChannelSortAsc(!channelSortAsc);
+    } else {
+      setChannelSortField(field);
+      setChannelSortAsc(true);
+    }
+  };
+
+  // Sort channels for Crawling Channels table (Default: 1st City Ascending, 2nd Name)
+  const sortedChannels = useMemo(() => {
+    const list = (cronConfig.channels || []).filter((ch) => {
+      if (!channelSearchQuery.trim()) return true;
+      const q = channelSearchQuery.toLowerCase();
+      return (
+        ch.name.toLowerCase().includes(q) ||
+        ch.url.toLowerCase().includes(q) ||
+        (ch.city && ch.city.toLowerCase().includes(q)) ||
+        (ch.country_code && ch.country_code.toLowerCase().includes(q))
+      );
+    });
+
+    return [...list].sort((a, b) => {
+      let valA = '';
+      let valB = '';
+
+      if (channelSortField === 'city') {
+        valA = (a.city || '').toLowerCase().trim();
+        valB = (b.city || '').toLowerCase().trim();
+      } else if (channelSortField === 'country_code') {
+        valA = (a.country_code || '').toLowerCase().trim();
+        valB = (b.country_code || '').toLowerCase().trim();
+      } else if (channelSortField === 'sourceType') {
+        valA = (a.sourceType || '').toLowerCase().trim();
+        valB = (b.sourceType || '').toLowerCase().trim();
+      } else if (channelSortField === 'name') {
+        valA = (a.name || '').toLowerCase().trim();
+        valB = (b.name || '').toLowerCase().trim();
+      } else if (channelSortField === 'url') {
+        valA = (a.url || '').toLowerCase().trim();
+        valB = (b.url || '').toLowerCase().trim();
+      }
+
+      if (valA !== valB) {
+        if (!valA && valB) return 1;
+        if (valA && !valB) return -1;
+        const comp = valA.localeCompare(valB, undefined, { numeric: true, sensitivity: 'base' });
+        if (comp !== 0) return channelSortAsc ? comp : -comp;
+      }
+
+      // 2차 정렬: City -> Name
+      const cityComp = (a.city || '').localeCompare(b.city || '');
+      if (cityComp !== 0) return cityComp;
+      return (a.name || '').localeCompare(b.name || '');
+    });
+  }, [cronConfig.channels, channelSearchQuery, channelSortField, channelSortAsc]);
 
   // -------------------------------------------------------------
   // VIEW: ADMIN LOGIN REQUIRED (If not logged in as admin)
@@ -1012,6 +1135,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                 <span>Export Excel</span>
               </button>
 
+              {/* Sync Authentic Venues Button */}
+              <button
+                onClick={async () => {
+                  setIsSyncingVenues(true);
+                  try {
+                    const res = await syncAuthenticVenues();
+                    if (res.repairedCount > 0) {
+                      alert(`총 ${res.repairedCount}건의 이벤트 주소 및 국가 정보가 실제 탱고 명소로 보정 및 동기화되었습니다.`);
+                    } else {
+                      alert('모든 이벤트의 주소 및 국가 정보가 이미 실제 탱고 명소로 정확하게 등록되어 있습니다.');
+                    }
+                  } catch (e: any) {
+                    alert('주소 동기화 중 오류가 발생했습니다: ' + (e?.message || e));
+                  } finally {
+                    setIsSyncingVenues(false);
+                  }
+                }}
+                disabled={isSyncingVenues}
+                className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors shrink-0 cursor-pointer disabled:opacity-50"
+                title="일괄 주소/국가 검증 및 실제 탱고 명소로 동기화"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingVenues ? 'animate-spin' : ''}`} />
+                <span>{isSyncingVenues ? '동기화 중...' : 'Sync Venues'}</span>
+              </button>
+
               {/* Add New Event Direct Button */}
               <button
                 onClick={() => setIsAddEventModalOpen(true)}
@@ -1063,7 +1211,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                       title="검색된 일자 기준 정렬"
                     >
                       <div className="flex items-center gap-1">
-                        <span>검색된 일자</span>
+                        <span>CRAWLED</span>
                         {adminEventSortField === 'created_at' ? (
                           <span className="text-red-600 font-bold">{adminEventSortAsc ? '↑' : '↓'}</span>
                         ) : (
@@ -1429,15 +1577,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
                       <label className="block font-semibold text-gray-700 mb-1">Country Code (2-letters) *</label>
-                      <input
-                        type="text"
+                      <select
                         required
-                        maxLength={2}
                         value={newEventForm.country_code}
                         onChange={(e) => setNewEventForm({ ...newEventForm, country_code: e.target.value.toUpperCase() })}
-                        placeholder="KR"
-                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 font-mono uppercase focus:bg-white focus:border-red-600"
-                      />
+                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-semibold text-gray-900 focus:bg-white focus:border-red-600 focus:outline-none"
+                      >
+                        {COUNTRY_LIST.map((c) => (
+                          <option key={c.code} value={c.code}>
+                            {c.name}
+                          </option>
+                        ))}
+                        {newEventForm.country_code && !COUNTRY_LIST.some((c) => c.code === newEventForm.country_code) && (
+                          <option value={newEventForm.country_code}>{newEventForm.country_code}</option>
+                        )}
+                      </select>
                     </div>
                     <div>
                       <label className="block font-semibold text-gray-700 mb-1">City *</label>
@@ -1563,24 +1717,128 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                 <thead>
                   <tr className="border-b border-gray-200 bg-gray-50/80 text-gray-600 uppercase font-semibold text-[11px]">
                     <th className="w-[10%] hidden md:table-cell py-2.5 px-2">UID</th>
-                    <th className="w-[18%] py-2.5 px-2.5">Username</th>
-                    <th className="w-[22%] py-2.5 px-2.5">Email</th>
-                    <th className="w-[12%] hidden sm:table-cell py-2.5 px-2">Phone</th>
+                    <th 
+                      onClick={() => {
+                        if (userSortField === 'username') {
+                          setUserSortAsc(!userSortAsc);
+                        } else {
+                          setUserSortField('username');
+                          setUserSortAsc(true);
+                        }
+                      }}
+                      className="w-[18%] py-2.5 px-2.5 cursor-pointer hover:text-gray-900 transition-colors select-none"
+                      title="Username 기준 정렬"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>Username</span>
+                        {userSortField === 'username' ? (
+                          <span className="text-red-600 font-bold">{userSortAsc ? '↑' : '↓'}</span>
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-gray-400" />
+                        )}
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => {
+                        if (userSortField === 'email') {
+                          setUserSortAsc(!userSortAsc);
+                        } else {
+                          setUserSortField('email');
+                          setUserSortAsc(true);
+                        }
+                      }}
+                      className="w-[22%] py-2.5 px-2.5 cursor-pointer hover:text-gray-900 transition-colors select-none"
+                      title="Email 기준 정렬"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>Email</span>
+                        {userSortField === 'email' ? (
+                          <span className="text-red-600 font-bold">{userSortAsc ? '↑' : '↓'}</span>
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-gray-400" />
+                        )}
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => {
+                        if (userSortField === 'phone') {
+                          setUserSortAsc(!userSortAsc);
+                        } else {
+                          setUserSortField('phone');
+                          setUserSortAsc(true);
+                        }
+                      }}
+                      className="w-[12%] hidden sm:table-cell py-2.5 px-2 cursor-pointer hover:text-gray-900 transition-colors select-none"
+                      title="Phone 기준 정렬"
+                    >
+                      <div className="flex items-center gap-1">
+                        <span>Phone</span>
+                        {userSortField === 'phone' ? (
+                          <span className="text-red-600 font-bold">{userSortAsc ? '↑' : '↓'}</span>
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-gray-400" />
+                        )}
+                      </div>
+                    </th>
                     <th className="w-[14%] py-2.5 px-2.5">Country / City</th>
-                    <th className="w-[8%] py-2.5 px-1.5 text-center">Role</th>
-                    <th className="w-[9%] hidden lg:table-cell py-2.5 px-2 text-center">Joined</th>
+                    <th 
+                      onClick={() => {
+                        if (userSortField === 'role') {
+                          setUserSortAsc(!userSortAsc);
+                        } else {
+                          setUserSortField('role');
+                          setUserSortAsc(true);
+                        }
+                      }}
+                      className="w-[8%] py-2.5 px-1.5 text-center cursor-pointer hover:text-gray-900 transition-colors select-none"
+                      title="1차 정렬: Role (클릭 시 ADMIN ↔ USER 순서 전환)"
+                    >
+                      <div className="flex items-center justify-center gap-1">
+                        <span>Role</span>
+                        {userSortField === 'role' ? (
+                          <span className="text-red-600 font-bold">{userSortAsc ? '↑' : '↓'}</span>
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-gray-400" />
+                        )}
+                      </div>
+                    </th>
+                    <th 
+                      onClick={() => {
+                        if (userSortField === 'created_at') {
+                          setUserSortAsc(!userSortAsc);
+                        } else {
+                          setUserSortField('created_at');
+                          setUserSortAsc(false);
+                        }
+                      }}
+                      className="w-[9%] hidden lg:table-cell py-2.5 px-2 text-center cursor-pointer hover:text-gray-900 transition-colors select-none"
+                      title={userSortField === 'role' ? "2차 정렬: 가입일 오름차순 (클릭 시 가입일 1차 정렬로 전환)" : "Joined 가입일자 기준 정렬"}
+                    >
+                      <div className="flex items-center justify-center gap-1">
+                        <span>Joined</span>
+                        {userSortField === 'created_at' ? (
+                          <span className="text-red-600 font-bold">{userSortAsc ? '↑' : '↓'}</span>
+                        ) : userSortField === 'role' ? (
+                          <span className="text-red-600/80 font-bold text-[10px] flex items-center gap-0.5" title="2차 정렬: 가입일 오름차순">
+                            <span className="text-[9px] text-gray-400 font-normal">2차</span>↑
+                          </span>
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-gray-400" />
+                        )}
+                      </div>
+                    </th>
                     <th className="w-[17%] py-2.5 px-2 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {filteredUsers.length === 0 ? (
+                  {sortedUsers.length === 0 ? (
                     <tr>
                       <td colSpan={8} className="py-8 text-center text-gray-400 text-xs">
                         No registered users found.
                       </td>
                     </tr>
                   ) : (
-                    filteredUsers.map((u) => {
+                    sortedUsers.map((u) => {
                       const isAdminRole = u.role === 'ADMIN' || u.username === 'parkinky';
                       return (
                         <tr key={u.id} className="hover:bg-gray-50/80 transition-colors">
@@ -1620,8 +1878,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                               {isAdminRole ? 'ADMIN' : 'USER'}
                             </span>
                           </td>
-                          <td className="py-2.5 px-2 text-[11px] text-gray-500 hidden lg:table-cell text-center align-middle">
-                            {u.created_at ? u.created_at.substring(0, 10) : '—'}
+                          <td className="py-2.5 px-2 text-[11px] text-gray-500 hidden lg:table-cell text-center align-middle font-mono">
+                            {u.created_at ? (
+                              <span title={formatDateTimeToCST(u.created_at)}>{formatDateToCST(u.created_at)}</span>
+                            ) : (
+                              '—'
+                            )}
                           </td>
                           <td className="py-2.5 px-2 text-right whitespace-nowrap align-middle">
                             <div className="flex items-center justify-end gap-1">
@@ -1729,7 +1991,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                   </div>
                   <div className="flex justify-between py-1">
                     <span className="font-semibold text-gray-600">Created At:</span>
-                    <span className="text-gray-700">{selectedUserDetails.created_at}</span>
+                    <span className="text-gray-700 font-mono text-xs">{formatDateTimeToCST(selectedUserDetails.created_at)}</span>
                   </div>
                 </div>
 
@@ -1885,14 +2147,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                       <label className="block font-bold text-gray-700 mb-1">
                         국가 코드 (Country Code)
                       </label>
-                      <input
-                        type="text"
-                        maxLength={2}
+                      <select
                         value={userEditForm.country_code}
                         onChange={(e) => setUserEditForm({ ...userEditForm, country_code: e.target.value.toUpperCase() })}
-                        placeholder="KR, US, AR, JP..."
-                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-amber-600 focus:outline-none transition-colors font-mono uppercase"
-                      />
+                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-semibold text-gray-900 focus:bg-white focus:border-amber-600 focus:outline-none transition-colors"
+                      >
+                        {COUNTRY_LIST.map((c) => (
+                          <option key={c.code} value={c.code}>
+                            {c.name}
+                          </option>
+                        ))}
+                        {userEditForm.country_code && !COUNTRY_LIST.some((c) => c.code === userEditForm.country_code) && (
+                          <option value={userEditForm.country_code}>{userEditForm.country_code}</option>
+                        )}
+                      </select>
                     </div>
 
                     <div>
@@ -2228,14 +2496,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                     </h4>
                   </div>
                   <p className="text-[11px] text-gray-500 mt-0.5">
-                    크롤링 시 활성화된 각 사이트에서 <strong className="text-gray-900">최근 1주일(Past 7 Days)</strong> 간의 신규 행사 정보를 검색하여 <strong className="text-red-700 font-semibold">[승인대상 목록 (PENDING)]</strong>에 자동 등록합니다.
+                    크롤링시 활성화된 각 사이트에서 <strong className="text-gray-900">최근 1주일(Past 7 Days) 동안 등록된</strong> 신규 행사 정보를 검색하여 <strong className="text-red-700 font-semibold">[승인대상 목록 (PENDING)]</strong>에 자동 등록합니다.
                   </p>
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
                   <div className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-50 text-red-700 border border-red-200 font-bold text-[11px]">
                     <Clock className="w-3 h-3" />
-                    <span>최근 1주일 검색</span>
+                    <span>최근 1주일 등록 검색</span>
                   </div>
                   <div className="px-2.5 py-1 rounded-lg bg-white border border-gray-200 text-gray-700 font-bold text-[11px]">
                     {(cronConfig.channels || []).filter((c) => c.enabled).length} / {(cronConfig.channels || []).length} 활성
@@ -2245,7 +2513,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                     onClick={handleRunCrawler}
                     disabled={crawlerRunning}
                     className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-400 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
-                    title="현재 Active로 되어 있는 모든 사이트에서 최근 1주일동안 새로 등록된 정보를 서치하고 최근 크롤링 날짜를 업데이트합니다"
+                    title="현재 Active로 되어 있는 모든 사이트에서 최근 1주일 동안 등록된 신규 행사 정보를 검색하고 최근 크롤링 날짜를 업데이트합니다"
                   >
                     <Play className={`w-3.5 h-3.5 ${crawlerRunning ? 'animate-spin' : ''}`} />
                     <span>{crawlerRunning ? '크롤링 중...' : '활성 채널 즉시 크롤링'}</span>
@@ -2279,16 +2547,86 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                 <table className="w-full table-fixed text-left text-xs border-collapse">
                   <thead>
                     <tr className="bg-gray-100/80 border-b border-gray-200 text-[11px] font-bold text-gray-600 uppercase tracking-wider">
-                      {/* 1. City (30% wider: ~9.5%, max-w-[95px]) */}
-                      <th className="py-2.5 px-2 w-[9.5%] min-w-[65px] max-w-[95px] whitespace-nowrap">City</th>
-                      {/* 2. Nation code (proper width to prevent overlap with Source) */}
-                      <th className="py-2.5 px-1 w-[68px] text-center whitespace-nowrap text-[10px]">Nation code</th>
-                      {/* 3. Source */}
-                      <th className="py-2.5 px-1.5 w-[68px] whitespace-nowrap">Source</th>
+                      {/* 1. City */}
+                      <th 
+                        onClick={() => handleChannelSort('city')}
+                        className="py-2.5 pl-2 pr-1 w-[8.5%] min-w-[65px] max-w-[90px] whitespace-nowrap cursor-pointer hover:text-gray-900 transition-colors select-none"
+                        title="City 기준 정렬"
+                      >
+                        <div className="flex items-center gap-1">
+                          <span>City</span>
+                          {channelSortField === 'city' ? (
+                            <span className="text-red-600 font-bold">{channelSortAsc ? '↑' : '↓'}</span>
+                          ) : (
+                            <ArrowUpDown className="w-3 h-3 text-gray-400" />
+                          )}
+                        </div>
+                      </th>
+
+                      {/* 2. NAT (국가코드 - 한글자 왼쪽으로 이동) */}
+                      <th 
+                        onClick={() => handleChannelSort('country_code')}
+                        className="py-2.5 px-1 w-[52px] text-center whitespace-nowrap cursor-pointer hover:text-gray-900 transition-colors select-none"
+                        title="NAT (국가코드) 기준 정렬"
+                      >
+                        <div className="flex items-center justify-center gap-0.5 -ml-1">
+                          <span>NAT</span>
+                          {channelSortField === 'country_code' ? (
+                            <span className="text-red-600 font-bold text-[11px]">{channelSortAsc ? '↑' : '↓'}</span>
+                          ) : (
+                            <ArrowUpDown className="w-2.5 h-2.5 text-gray-400" />
+                          )}
+                        </div>
+                      </th>
+
+                      {/* 3. SOURCE (한글자 왼쪽으로 이동) */}
+                      <th 
+                        onClick={() => handleChannelSort('sourceType')}
+                        className="py-2.5 px-1 w-[66px] whitespace-nowrap cursor-pointer hover:text-gray-900 transition-colors select-none"
+                        title="SOURCE 기준 정렬"
+                      >
+                        <div className="flex items-center gap-0.5 -ml-1">
+                          <span>SOURCE</span>
+                          {channelSortField === 'sourceType' ? (
+                            <span className="text-red-600 font-bold text-[11px]">{channelSortAsc ? '↑' : '↓'}</span>
+                          ) : (
+                            <ArrowUpDown className="w-2.5 h-2.5 text-gray-400" />
+                          )}
+                        </div>
+                      </th>
+
                       {/* 4. 채널이름 */}
-                      <th className="py-2.5 px-2 w-[22%] whitespace-nowrap">채널이름</th>
+                      <th 
+                        onClick={() => handleChannelSort('name')}
+                        className="py-2.5 px-2 w-[23%] whitespace-nowrap cursor-pointer hover:text-gray-900 transition-colors select-none"
+                        title="채널이름 기준 정렬"
+                      >
+                        <div className="flex items-center gap-1">
+                          <span>채널이름</span>
+                          {channelSortField === 'name' ? (
+                            <span className="text-red-600 font-bold">{channelSortAsc ? '↑' : '↓'}</span>
+                          ) : (
+                            <ArrowUpDown className="w-3 h-3 text-gray-400" />
+                          )}
+                        </div>
+                      </th>
+
                       {/* 5. 사이트 주소 */}
-                      <th className="py-2.5 px-2 w-[26%] whitespace-nowrap">사이트 주소</th>
+                      <th 
+                        onClick={() => handleChannelSort('url')}
+                        className="py-2.5 px-2 w-[26%] whitespace-nowrap cursor-pointer hover:text-gray-900 transition-colors select-none"
+                        title="사이트 주소 기준 정렬"
+                      >
+                        <div className="flex items-center gap-1">
+                          <span>사이트 주소</span>
+                          {channelSortField === 'url' ? (
+                            <span className="text-red-600 font-bold">{channelSortAsc ? '↑' : '↓'}</span>
+                          ) : (
+                            <ArrowUpDown className="w-3 h-3 text-gray-400" />
+                          )}
+                        </div>
+                      </th>
+
                       {/* 6. 최근크롤링날짜 (tight width, text-center) */}
                       <th className="py-2.5 px-1.5 w-[86px] text-center whitespace-nowrap">최근크롤링날짜</th>
                       {/* 7. 누적 발견수 (tight width, centered to eliminate empty gap with date) */}
@@ -2302,18 +2640,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {(cronConfig.channels || [])
-                      .filter((ch) => {
-                        if (!channelSearchQuery.trim()) return true;
-                        const q = channelSearchQuery.toLowerCase();
-                        return (
-                          ch.name.toLowerCase().includes(q) ||
-                          ch.url.toLowerCase().includes(q) ||
-                          (ch.city && ch.city.toLowerCase().includes(q)) ||
-                          (ch.country_code && ch.country_code.toLowerCase().includes(q))
-                        );
-                      })
-                      .map((ch) => {
+                    {sortedChannels.length === 0 ? (
+                      <tr>
+                        <td colSpan={10} className="py-8 text-center text-gray-400 text-xs">
+                          등록되거나 검색된 채널이 없습니다.
+                        </td>
+                      </tr>
+                    ) : (
+                      sortedChannels.map((ch) => {
                         const typeColorMap: Record<string, string> = {
                           FACEBOOK: 'bg-blue-50 text-blue-700 border-blue-200',
                           PORTAL: 'bg-purple-50 text-purple-700 border-purple-200',
@@ -2340,29 +2674,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                                 : 'bg-gray-50/60 opacity-75 hover:bg-gray-100/60 text-gray-500'
                             }`}
                           >
-                            {/* 1. City (30% wider: max-w-[95px], truncate with ellipsis on overflow) */}
-                            <td className="py-2.5 px-2 max-w-[95px]">
+                            {/* 1. City (max-w-[90px], truncate with ellipsis on overflow) */}
+                            <td className="py-2.5 pl-2 pr-1 max-w-[90px]">
                               <div className="truncate font-semibold text-gray-800 text-xs" title={ch.city || '-'}>
                                 {ch.city ? ch.city : <span className="text-gray-400 font-normal">-</span>}
                               </div>
                             </td>
 
-                            {/* 2. Nation code */}
+                            {/* 2. NAT (한글자 왼쪽으로 이동) */}
                             <td className="py-2.5 px-1 text-center whitespace-nowrap">
-                              {ch.country_code ? (
-                                <span className="px-1.5 py-0.5 rounded font-mono font-bold text-[10px] bg-gray-100 text-gray-700 border border-gray-200">
-                                  {ch.country_code}
-                                </span>
-                              ) : (
-                                <span className="text-gray-400 font-normal">-</span>
-                              )}
+                              <div className="-ml-1">
+                                {ch.country_code ? (
+                                  <span className="px-1.5 py-0.5 rounded font-mono font-bold text-[10px] bg-gray-100 text-gray-700 border border-gray-200">
+                                    {ch.country_code}
+                                  </span>
+                                ) : (
+                                  <span className="text-gray-400 font-normal">-</span>
+                                )}
+                              </div>
                             </td>
 
-                            {/* 3. Source */}
-                            <td className="py-2.5 px-1.5 whitespace-nowrap">
-                              <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border ${badgeClass}`}>
-                                {sourceLabel}
-                              </span>
+                            {/* 3. SOURCE (한글자 왼쪽으로 이동) */}
+                            <td className="py-2.5 px-1 whitespace-nowrap">
+                              <div className="-ml-1">
+                                <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold border ${badgeClass}`}>
+                                  {sourceLabel}
+                                </span>
+                              </div>
                             </td>
 
                             {/* 4. 채널이름 */}
@@ -2390,7 +2728,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
 
                             {/* 6. 최근크롤링날짜 */}
                             <td className="py-2.5 px-1.5 text-center text-gray-600 font-mono text-[11px] whitespace-nowrap">
-                              {ch.lastCrawledAt ? ch.lastCrawledAt.substring(0, 10) : <span className="text-gray-400 font-sans">미실행</span>}
+                              {ch.lastCrawledAt ? (
+                                <span title={formatDateTimeToCST(ch.lastCrawledAt)}>{formatDateToCST(ch.lastCrawledAt)}</span>
+                              ) : (
+                                <span className="text-gray-400 font-sans">미실행</span>
+                              )}
                             </td>
 
                             {/* 7. 누적 발견수 (빈공간 제거: centered & compact padding) */}
@@ -2441,7 +2783,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                             </td>
                           </tr>
                         );
-                      })}
+                      }))}
                   </tbody>
                 </table>
               </div>
@@ -2449,16 +2791,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
               <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-[11px] leading-relaxed flex items-start gap-2">
                 <AlertCircle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
                 <div>
-                  <strong>자동/수동 크롤링 검색 기준:</strong> 크롤링 실행 시 각 채널 사이트에서 <strong>최근 1주일 이내</strong>에 등록되거나 게시된 정보를 중복 검사한 뒤, <strong>승인대상 목록 (PENDING)</strong>으로 등록합니다. 등록된 이벤트는 상단 <strong>[이벤트 관리 &gt; PENDING]</strong> 탭에서 승인 또는 반려하실 수 있습니다.
+                  <strong>자동/수동 크롤링 검색 기준:</strong> 크롤링 실행 시 각 채널 사이트에서 <strong>최근 1주일(Past 7 Days) 동안 등록된</strong> 신규 행사 정보를 검색하여 중복 검사한 뒤, <strong>승인대상 목록 (PENDING)</strong>으로 등록합니다. 등록된 이벤트는 상단 <strong>[이벤트 관리 &gt; PENDING]</strong> 탭에서 승인 또는 반려하실 수 있습니다.
                 </div>
               </div>
             </div>
 
             {/* Manual Run Now Button & Live Status */}
             <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-t border-gray-100">
-              <div className="text-xs text-gray-500 space-y-0.5">
-                <p>Last run: <strong className="text-gray-800">{cronConfig.lastRunAt || 'None'}</strong></p>
-                <p>Next scheduled: <strong className="text-gray-800">{cronConfig.nextRunAt || '2026-09-11T01:00:00Z'}</strong></p>
+              <div className="text-xs text-gray-500 space-y-0.5 font-mono">
+                <p>Last run: <strong className="text-gray-800 font-semibold">{cronConfig.lastRunAt ? formatDateTimeToCST(cronConfig.lastRunAt) : 'None'}</strong></p>
+                <p>Next scheduled: <strong className="text-gray-800 font-semibold">{cronConfig.nextRunAt ? formatDateTimeToCST(cronConfig.nextRunAt) : formatDateTimeToCST('2026-09-11T06:00:00Z')}</strong></p>
               </div>
 
               <button
@@ -2467,7 +2809,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                 className="px-5 py-2.5 rounded-lg bg-red-600 hover:bg-red-700 active:bg-red-800 text-white text-xs font-bold shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer"
               >
                 <RefreshCw className={`w-4 h-4 ${crawlerRunning ? 'animate-spin' : ''}`} />
-                <span>{crawlerRunning ? '최근 1주일 데이터 검색 및 크롤링 중...' : 'Run Crawler Now (수동 크롤링 실행)'}</span>
+                <span>{crawlerRunning ? '최근 1주일 등록 데이터 검색 및 크롤링 중...' : 'Run Crawler Now (수동 크롤링 실행)'}</span>
               </button>
             </div>
 
@@ -2477,7 +2819,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-gray-100">
                   <div className="flex items-center gap-2 text-green-700 font-extrabold text-sm">
                     <CheckCircle2 className="w-5 h-5 text-green-600" />
-                    <span>크롤링 및 최근 1주일 데이터 검색 완료!</span>
+                    <span>크롤링 및 최근 1주일 등록 데이터 검색 완료!</span>
                   </div>
                   {crawlerResult.timeWindow && (
                     <span className="px-2.5 py-0.5 rounded-full bg-gray-100 text-gray-700 font-mono text-[11px] font-semibold">
@@ -2507,7 +2849,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                 {crawlerResult.addedCount > 0 && (
                   <div className="p-3 rounded-xl bg-red-50 border border-red-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="text-red-900 text-xs">
-                      <strong>승인 대기 안내:</strong> 최근 1주일 간의 크롤링 데이터 {crawlerResult.addedCount}건이 승인 대상 목록에 등록되었습니다.
+                      <strong>승인 대기 안내:</strong> 최근 1주일 동안 등록된 신규 행사 크롤링 데이터 {crawlerResult.addedCount}건이 승인 대상 목록에 등록되었습니다.
                     </div>
                     <button
                       onClick={() => {
@@ -2556,8 +2898,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                 <tbody className="divide-y divide-gray-100 font-mono">
                   {cronConfig.runHistory.map((log) => (
                     <tr key={log.id} className="hover:bg-gray-50/70">
-                      <td className="py-2.5 px-2 text-gray-700 truncate" title={log.timestamp}>
-                        {log.timestamp.replace('T', ' ').substring(0, 19)}
+                      <td className="py-2.5 px-2 text-gray-700 truncate" title={formatDateTimeToCST(log.timestamp)}>
+                        {formatDateTimeToCST(log.timestamp)}
                       </td>
                       <td className="py-2.5 px-1.5 text-center">
                         <span className="px-1.5 py-0.5 rounded bg-green-50 text-green-700 font-bold border border-green-200 text-[10px]">
@@ -2998,14 +3340,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
 
                 <div className="space-y-1">
                   <label className="block font-bold text-gray-700">대상 국가 코드</label>
-                  <input
-                    type="text"
-                    maxLength={4}
-                    placeholder="예: US, KR, AR, ALL"
+                  <select
                     value={channelForm.country_code}
                     onChange={(e) => setChannelForm({ ...channelForm, country_code: e.target.value.toUpperCase() })}
-                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 uppercase font-mono focus:bg-white focus:border-red-600 focus:outline-none"
-                  />
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-semibold text-gray-800 focus:bg-white focus:border-red-600 focus:outline-none"
+                  >
+                    <option value="ALL">ALL (전체 국가 / 글로벌)</option>
+                    {COUNTRY_LIST.map((c) => (
+                      <option key={c.code} value={c.code}>
+                        {c.name}
+                      </option>
+                    ))}
+                    {channelForm.country_code &&
+                      channelForm.country_code !== 'ALL' &&
+                      !COUNTRY_LIST.some((c) => c.code === channelForm.country_code) && (
+                        <option value={channelForm.country_code}>
+                          {channelForm.country_code}
+                        </option>
+                      )}
+                  </select>
                 </div>
               </div>
 
@@ -3016,7 +3369,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                     type="text"
                     placeholder="예: Atlanta, Seoul, Global"
                     value={channelForm.city}
-                    onChange={(e) => setChannelForm({ ...channelForm, city: e.target.value })}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      const clean = val.toLowerCase().trim();
+                      let recState = channelForm.state;
+                      let recCountry = channelForm.country_code;
+
+                      if (clean.includes('seoul')) {
+                        recCountry = 'KR';
+                        recState = 'Seoul';
+                      } else if (clean.includes('tokyo')) {
+                        recCountry = 'JP';
+                        recState = 'Tokyo';
+                      } else if (clean.includes('toronto')) {
+                        recCountry = 'CA';
+                        recState = 'ON';
+                      } else if (clean.includes('montreal') || clean.includes('montréal')) {
+                        recCountry = 'CA';
+                        recState = 'Quebec';
+                      } else if (clean.includes('portland')) {
+                        recCountry = 'US';
+                        recState = 'OR';
+                      } else if (clean.includes('houston')) {
+                        recCountry = 'US';
+                        recState = 'TX';
+                      }
+
+                      setChannelForm({
+                        ...channelForm,
+                        city: val,
+                        state: recState,
+                        country_code: recCountry,
+                      });
+                    }}
                     className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-red-600 focus:outline-none"
                   />
                 </div>

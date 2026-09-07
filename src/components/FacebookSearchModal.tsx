@@ -28,6 +28,7 @@ import {
   parseFacebookPostText 
 } from '../data/facebookCommunities';
 import { isDuplicateEvent, formatDateRange } from '../utils/dedup';
+import { formatDateToCST } from '../utils/formatters';
 
 interface FacebookSearchModalProps {
   isOpen: boolean;
@@ -781,7 +782,7 @@ export const FacebookSearchModal: React.FC<FacebookSearchModalProps> = ({
 
                           <span className="flex items-center gap-1 font-mono text-[11px] text-stone-500 dark:text-stone-400" title="검색된 일자">
                             <Clock className="w-3 h-3 text-indigo-500" />
-                            <span>검색일: {ev.created_at ? ev.created_at.substring(0, 10) : new Date().toISOString().substring(0, 10)}</span>
+                            <span>검색일: {formatDateToCST(ev.created_at || new Date())}</span>
                           </span>
                         </div>
 

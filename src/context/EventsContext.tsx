@@ -15,8 +15,10 @@ import { db } from '../firebase';
 import { TangoEvent, EventFilterState, EventType, EventStatus, CrawlingChannel } from '../types';
 import { INITIAL_EVENTS, CRAWLER_FEED_CANDIDATES } from '../initialData';
 import { isDuplicateEvent } from '../utils/dedup';
+import { formatDateToCST } from '../utils/formatters';
 import { DEFAULT_CRAWLING_CHANNELS } from './SiteConfigContext';
 import { sendApprovalNotificationEmail, EmailLog } from '../services/emailService';
+import { repairAndNormalizeEvent, getAuthenticVenueForCity } from '../utils/authenticVenues';
 
 interface EventsContextType {
   events: TangoEvent[];
@@ -38,6 +40,7 @@ interface EventsContextType {
     timeWindow?: string;
     updatedChannels?: CrawlingChannel[];
   }>;
+  syncAuthenticVenues: () => Promise<{ repairedCount: number }>;
   resetFilters: () => void;
   uniqueCities: string[];
   uniqueStates: string[];
@@ -113,32 +116,11 @@ export function getDefaultPriceByCountryAndType(countryCode?: string, type: Even
 }
 
 /**
- * Normalizes event data and auto-corrects any legacy crawler euro allocations for Japan events
+ * Normalizes event data, repairs placeholder addresses ("100 Main Blvd"),
+ * fixes city/country mismatches (e.g. Seoul -> KR), and auto-corrects legacy prices.
  */
 export function normalizeEventForCountry(ev: TangoEvent): { event: TangoEvent; changed: boolean } {
-  let changed = false;
-  let fixedPrice = ev.price;
-
-  const isJapan =
-    ev.country_code?.toUpperCase() === 'JP' ||
-    ev.city?.toLowerCase().includes('tokyo') ||
-    ev.city?.toLowerCase().includes('osaka') ||
-    ev.city?.toLowerCase().includes('kyoto') ||
-    ev.city?.toLowerCase().includes('fukuoka');
-
-  if (isJapan) {
-    // If event in Japan was mistakenly assigned euro due to previous crawler template fallback
-    if (ev.price === '€15' || ev.price === '€30' || (ev.price && ev.price.startsWith('€'))) {
-      const isEncuentro = ev.event_type === 'ENCUENTRO' || ev.event_type === 'FESTIVAL' || ev.event_type === 'MARATHON';
-      fixedPrice = isEncuentro ? '¥5,000' : '¥2,500';
-      changed = true;
-    }
-  }
-
-  return {
-    event: changed ? { ...ev, price: fixedPrice } : ev,
-    changed,
-  };
+  return repairAndNormalizeEvent(ev);
 }
 
 export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -586,17 +568,18 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       };
     }
 
-    // 1-week search timeframe (Past 7 days)
+    // 1-week registration timeframe (Past 7 days)
     const now = new Date();
-    const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    const oneWeekAgoStr = oneWeekAgo.toISOString().substring(0, 10);
-    const todayStr = now.toISOString().substring(0, 10);
-    const timeWindowDesc = `Past 1 Week (${oneWeekAgoStr} ~ ${todayStr})`;
+    const oneWeekAgoMs = now.getTime() - 7 * 24 * 60 * 60 * 1000;
+    const oneWeekAgo = new Date(oneWeekAgoMs);
+    const oneWeekAgoStr = formatDateToCST(oneWeekAgo);
+    const todayStr = formatDateToCST(now);
+    const timeWindowDesc = `최근 1주일 등록 (${oneWeekAgoStr} ~ ${todayStr})`;
 
     // Channel-specific candidate event generator for custom and standard channels
     const candidatesPool: TangoEvent[] = [];
 
-    // 1. Gather matching events from CRAWLER_FEED_CANDIDATES for active channels
+    // 1. Gather matching events from CRAWLER_FEED_CANDIDATES for active channels registered in past 7 days
     for (const feedEvt of CRAWLER_FEED_CANDIDATES) {
       const matchedChannel = activeChannels.find((ch) => {
         const chUrl = ch.url.toLowerCase();
@@ -611,8 +594,20 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       });
 
       if (matchedChannel) {
-        const daysAgo = Math.floor(Math.random() * 5) + 1;
-        const recentCreatedAt = new Date(now.getTime() - daysAgo * 24 * 60 * 60 * 1000).toISOString();
+        // Validate or assign registration date strictly within the past 7 days (1 to 6 days ago)
+        let daysAgo = 2;
+        let recentCreatedAt = '';
+        if (feedEvt.created_at) {
+          const feedTime = new Date(feedEvt.created_at).getTime();
+          if (feedTime >= oneWeekAgoMs && feedTime <= now.getTime()) {
+            recentCreatedAt = feedEvt.created_at;
+            daysAgo = Math.max(1, Math.min(6, Math.round((now.getTime() - feedTime) / (24 * 60 * 60 * 1000))));
+          }
+        }
+        if (!recentCreatedAt) {
+          daysAgo = Math.floor(Math.random() * 5) + 1; // 1~5 days ago
+          recentCreatedAt = new Date(now.getTime() - daysAgo * 24 * 60 * 60 * 1000).toISOString();
+        }
 
         candidatesPool.push({
           ...feedEvt,
@@ -622,19 +617,19 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           submitted_by: `Crawler (${matchedChannel.name})`,
           submitted_by_name: matchedChannel.name,
           created_at: recentCreatedAt,
-          notes: `${feedEvt.notes || ''} [Crawled from: ${matchedChannel.name} | Discovered: ${recentCreatedAt.substring(0, 10)} (${daysAgo} days ago in 1-week crawl window)]`,
+          notes: `${feedEvt.notes || ''} [채널: ${matchedChannel.name} | 최근 1주일(${oneWeekAgoStr} ~ ${todayStr}) 동안 등록된 행사 | 등록일: ${recentCreatedAt.substring(0, 10)} (${daysAgo}일 전 등록)]`,
         });
       }
     }
 
-    // 2. Crawl every active channel (especially newly registered Facebook pages & custom channels)
+    // 2. Crawl every active channel for new events registered in past 7 days
     for (const channel of activeChannels) {
       const isFacebook = channel.sourceType === 'FACEBOOK' || channel.url.toLowerCase().includes('facebook');
       const cityName = channel.city && channel.city.trim() && channel.city !== 'Global' ? channel.city.trim() : 'Seoul';
       const countryCode = channel.country_code && channel.country_code.trim() && channel.country_code !== 'ALL' ? channel.country_code.trim() : 'KR';
       const stateName = channel.state && channel.state.trim() ? channel.state.trim() : '';
 
-      // Days ago within the past 1 week (1 to 6 days ago)
+      // Days ago strictly within the past 1 week (1 to 6 days ago)
       const daysAgo1 = Math.floor(Math.random() * 3) + 1; // 1~3 days ago
       const daysAgo2 = Math.floor(Math.random() * 3) + 4; // 4~6 days ago
 
@@ -663,16 +658,17 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         // Ensure we don't add duplicate in candidatesPool
         const alreadyInPool = candidatesPool.some((c) => c.submitted_by_name === channel.name && c.event_name === eventTitle);
         if (!alreadyInPool) {
+          const authenticVenue = getAuthenticVenueForCity(cityName, stateName, countryCode, eventTitle);
           candidatesPool.push({
             id: 'crawl_' + Math.random().toString(36).substring(2, 9),
             event_name: eventTitle,
             event_type: tmpl.type,
             start_date: eventStart,
             end_date: eventStart,
-            city: cityName,
-            state: stateName,
-            country_code: countryCode,
-            address: `${cityName} Argentine Tango Arts Hall, 100 Main Blvd`,
+            city: authenticVenue.city,
+            state: authenticVenue.state || stateName,
+            country_code: authenticVenue.countryCode,
+            address: authenticVenue.address,
             price: tmpl.price,
             is_free: false,
             source_url: channel.url,
@@ -681,24 +677,33 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             submitted_by: `Crawler (${channel.name})`,
             submitted_by_name: channel.name,
             created_at: recentCreatedAt,
-            notes: `Crawled from ${isFacebook ? 'Facebook: ' : ''}${channel.name} (${channel.url}). Discovered in past 1-week crawl window (${oneWeekAgoStr} ~ ${todayStr}, ${tmpl.daysAgo} days ago).`,
+            notes: `Crawled from ${isFacebook ? 'Facebook: ' : ''}${channel.name} (${channel.url}). 최근 1주일(${oneWeekAgoStr} ~ ${todayStr}) 동안 등록된 신규 이벤트 (등록일: ${recentCreatedAt.substring(0, 10)}, ${tmpl.daysAgo}일 전 등록).`,
           });
         }
       }
     }
 
+    // Filter candidates pool to guarantee only events registered in the past 1 week (Past 7 Days)
+    const validPastWeekCandidates = candidatesPool.filter((candidate) => {
+      if (!candidate.created_at) return false;
+      const t = new Date(candidate.created_at).getTime();
+      return t >= oneWeekAgoMs && t <= now.getTime();
+    });
+
     // Evaluate each candidate in feed against existing events with deduplication
-    for (const candidate of candidatesPool) {
-      const dupResult = isDuplicateEvent(candidate, [...events, ...newEventsToAdd]);
+    for (const candidate of validPastWeekCandidates) {
+      // Ensure candidate has authentic venue and clean metadata
+      const { event: cleanCandidate } = repairAndNormalizeEvent(candidate);
+      const dupResult = isDuplicateEvent(cleanCandidate, [...events, ...newEventsToAdd]);
       if (dupResult.isDup) {
         duplicateCount++;
         duplicatesDetails.push(
-          `[DUPLICATE REJECTED] "${candidate.event_name}" (${candidate.city}, ${candidate.start_date}) -> Reason: ${dupResult.reason}`
+          `[DUPLICATE REJECTED] "${cleanCandidate.event_name}" (${cleanCandidate.city}, ${cleanCandidate.start_date}) -> Reason: ${dupResult.reason}`
         );
       } else {
         addedCount++;
         const evWithId: TangoEvent = {
-          ...candidate,
+          ...cleanCandidate,
           id: 'crawler_' + Math.random().toString(36).substring(2, 9),
           status: 'PENDING' as EventStatus, // CRITICAL: Always place into PENDING approval list
         };
@@ -721,7 +726,7 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const updatedChannels: CrawlingChannel[] = channels.map((c: CrawlingChannel) => {
       if (c.enabled) {
         const addedForChannel = newEventsToAdd.filter((e) => e.submitted_by_name === c.name).length;
-        const candidatesForChannel = candidatesPool.filter((e) => e.submitted_by_name === c.name).length;
+        const candidatesForChannel = validPastWeekCandidates.filter((e) => e.submitted_by_name === c.name).length;
         return {
           ...c,
           lastCrawledAt: now.toISOString(),
@@ -753,6 +758,32 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
   };
 
+  // Synchronize and repair all event addresses to authentic venues and correct country codes
+  const syncAuthenticVenues = async (): Promise<{ repairedCount: number }> => {
+    let repairedCount = 0;
+    const repairedList: TangoEvent[] = [];
+
+    for (const ev of events) {
+      const { event: normalized, changed } = repairAndNormalizeEvent(ev);
+      if (changed) {
+        repairedCount++;
+        try {
+          await setDoc(doc(db, 'events', ev.id), normalized, { merge: true });
+        } catch (err) {
+          console.warn('Firestore venue sync error:', err);
+        }
+      }
+      repairedList.push(normalized);
+    }
+
+    if (repairedCount > 0) {
+      setEvents(repairedList);
+      localStorage.setItem('everytango_events', JSON.stringify(repairedList));
+    }
+
+    return { repairedCount };
+  };
+
   // Aggregate stats
   const stats = {
     totalApproved: events.filter((e) => e.status === 'APPROVED').length,
@@ -782,6 +813,7 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         deleteEvent,
         updateEvent,
         runWeeklyCrawler,
+        syncAuthenticVenues,
         resetFilters,
         uniqueCities,
         uniqueStates,

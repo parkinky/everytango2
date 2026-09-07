@@ -21,6 +21,7 @@ import { TangoEvent, EventExperience, SupportedLanguage } from '../types';
 import { useExperiences } from '../context/ExperiencesContext';
 import { useAuth } from '../context/AuthContext';
 import { translations } from '../i18n';
+import { formatDateTimeToCST } from '../utils/formatters';
 
 interface ExperienceDrawerProps {
   event: TangoEvent | null;
@@ -164,18 +165,7 @@ export const ExperienceDrawer: React.FC<ExperienceDrawerProps> = ({
   };
 
   const formatDate = (isoStr: string) => {
-    try {
-      const d = new Date(isoStr);
-      return d.toLocaleDateString(undefined, {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
-    } catch {
-      return isoStr;
-    }
+    return formatDateTimeToCST(isoStr, false);
   };
 
   return (

@@ -175,6 +175,32 @@ export const SiteConfigProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         const parsed = JSON.parse(saved);
         if (!parsed.channels || !Array.isArray(parsed.channels) || parsed.channels.length === 0) {
           parsed.channels = DEFAULT_CRAWLING_CHANNELS;
+        } else {
+          parsed.channels = parsed.channels.map((ch: CrawlingChannel) => {
+            const city = (ch.city || '').toLowerCase();
+            let cCode = ch.country_code;
+            let sState = ch.state;
+            if (city.includes('seoul')) {
+              cCode = 'KR';
+            } else if (city.includes('tokyo') && cCode !== 'JP') {
+              cCode = 'JP';
+            } else if (city.includes('toronto')) {
+              cCode = 'CA';
+              sState = sState || 'ON';
+            } else if (city.includes('montreal') || city.includes('montréal')) {
+              cCode = 'CA';
+              sState = sState || 'Quebec';
+            } else if (city.includes('portland') && cCode === 'US') {
+              sState = sState || 'OR';
+            } else if (city.includes('houston') && cCode === 'US') {
+              sState = sState || 'TX';
+            }
+            return {
+              ...ch,
+              country_code: cCode,
+              state: sState,
+            };
+          });
         }
         return { ...DEFAULT_CRON_CONFIG, ...parsed };
       }
@@ -237,8 +263,31 @@ export const SiteConfigProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     channelData: Omit<CrawlingChannel, 'id' | 'lastCrawledAt' | 'discoveredCount' | 'addedAt'>
   ): CrawlingChannel => {
     const newId = 'chan_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+    
+    // Normalize city / country
+    let cCode = channelData.country_code;
+    let sState = channelData.state;
+    const city = (channelData.city || '').toLowerCase();
+    if (city.includes('seoul')) {
+      cCode = 'KR';
+    } else if (city.includes('tokyo') && cCode !== 'JP') {
+      cCode = 'JP';
+    } else if (city.includes('toronto')) {
+      cCode = 'CA';
+      sState = sState || 'ON';
+    } else if (city.includes('montreal') || city.includes('montréal')) {
+      cCode = 'CA';
+      sState = sState || 'Quebec';
+    } else if (city.includes('portland') && cCode === 'US') {
+      sState = sState || 'OR';
+    } else if (city.includes('houston') && cCode === 'US') {
+      sState = sState || 'TX';
+    }
+
     const newChannel: CrawlingChannel = {
       ...channelData,
+      country_code: cCode,
+      state: sState,
       id: newId,
       lastCrawledAt: null,
       discoveredCount: 0,

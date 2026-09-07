@@ -131,7 +131,7 @@ export const EventTable: React.FC<EventTableProps> = ({ events, currentLang, onE
           <button 
             onClick={() => toggleSort('crawled')} 
             className={`font-semibold px-1.5 py-0.5 rounded transition-colors ${sortField === 'crawled' ? 'bg-red-50 text-red-600 font-bold' : 'text-gray-600 hover:text-gray-900'}`}
-            title="Sort by Crawled Date"
+            title="Sort by Crawled"
           >
             {t.table.crawledDate} {sortField === 'crawled' && (sortAsc ? '↑' : '↓')}
           </button>
@@ -269,15 +269,17 @@ export const EventTable: React.FC<EventTableProps> = ({ events, currentLang, onE
                       {/* Line 1: Country & City, State */}
                       <div className="text-xs font-semibold text-gray-900 flex items-center gap-1.5 truncate">
                         <span className="px-1.5 py-0.2 rounded bg-gray-100 text-gray-700 font-mono text-[10px] font-bold border border-gray-200 shrink-0">
-                          {ev.country_code}
+                          {addr.locationLine.startsWith('[') ? addr.locationLine.slice(1, addr.locationLine.indexOf(']')) : ev.country_code}
                         </span>
-                        <span className="truncate">{ev.city}{ev.state ? `, ${ev.state}` : ''}</span>
+                        <span className="truncate">
+                          {addr.locationLine.includes('] ') ? addr.locationLine.slice(addr.locationLine.indexOf('] ') + 2) : `${ev.city}${ev.state ? `, ${ev.state}` : ''}`}
+                        </span>
                       </div>
                       
                       {/* Line 2: Venue / Street Address */}
-                      <div className="text-[11px] text-gray-500 truncate mt-0.5 flex items-center gap-1" title={ev.address}>
+                      <div className="text-[11px] text-gray-500 truncate mt-0.5 flex items-center gap-1" title={addr.venueLine}>
                         <MapPin className="w-2.5 h-2.5 text-gray-400 shrink-0" />
-                        <span className="truncate">{ev.address || '—'}</span>
+                        <span className="truncate">{addr.venueLine}</span>
                       </div>
                     </div>
                   </td>
