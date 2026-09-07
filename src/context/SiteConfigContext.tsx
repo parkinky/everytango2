@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { SiteConfig, CronScheduleConfig, CronRunLog, CrawlingChannel } from '../types';
+import { auth } from '../firebase';
 
 export const DEFAULT_CRAWLING_CHANNELS: CrawlingChannel[] = [
   {
@@ -371,15 +372,22 @@ export const SiteConfigProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     extraContext: any = {}
   ): Promise<{ success: boolean; reply: string; error?: string; suggestedConfig?: Partial<SiteConfig> }> => {
     try {
+      const currentUser = auth.currentUser;
+      if (!currentUser) {
+        return { success: false, reply: '', error: 'You must be signed in as the admin to use this feature.' };
+      }
+      const idToken = await currentUser.getIdToken();
       const res = await fetch('/api/gemini/manage', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${idToken}`,
+        },
         body: JSON.stringify({
           prompt,
           action,
           siteConfig,
           eventsSummary: extraContext,
-          userAdmin: 'parkinky',
         }),
       });
 

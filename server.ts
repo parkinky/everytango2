@@ -3,6 +3,7 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
+import firebaseAppletConfig from './firebase-applet-config.json';
 
 dotenv.config();
 
@@ -24,6 +25,62 @@ function getAIClient() {
   return aiClient;
 }
 
+// --- Admin auth guard for the paid Gemini endpoint --------------------
+// Cost/abuse guard: the client used to prove it was the admin by sending
+// a plain `userAdmin: 'parkinky'` string in the request body, which is
+// trivial to forge - anyone who found this endpoint in the JS bundle
+// could call the paid Gemini API for free. Now we require a real Firebase
+// ID token (verified via the Identity Toolkit REST API, no firebase-admin
+// dependency needed) and check the token's email against ADMIN_EMAIL.
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'parkinky@gmail.com';
+
+async function verifyAdminAuth(req: express.Request): Promise<{ ok: boolean; status: number; error?: string }> {
+  const authHeader = (req.headers['authorization'] as string) || '';
+  const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  if (!idToken) {
+    return { ok: false, status: 401, error: 'Missing admin credentials.' };
+  }
+  try {
+    const apiKey = (firebaseAppletConfig as any).apiKey;
+    const lookupRes = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idToken }),
+      }
+    );
+    if (!lookupRes.ok) {
+      return { ok: false, status: 401, error: 'Invalid or expired credentials.' };
+    }
+    const data: any = await lookupRes.json();
+    const email = data?.users?.[0]?.email;
+    if (!email || email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
+      return { ok: false, status: 403, error: 'Not authorized as site admin.' };
+    }
+    return { ok: true, status: 200 };
+  } catch (e) {
+    console.error('Admin auth verification failed');
+    return { ok: false, status: 401, error: 'Could not verify admin credentials.' };
+  }
+}
+
+// Very small in-memory rate limiter (per-process, resets on redeploy).
+// Not meant to be bulletproof - it's a cheap second layer so a leaked or
+// replayed admin token still can't run up unbounded Gemini API cost.
+const rateLimitBuckets = new Map<string, { count: number; windowStart: number }>();
+function isRateLimited(ip: string, limit = 20, windowMs = 60_000): boolean {
+  const now = Date.now();
+  const bucket = rateLimitBuckets.get(ip);
+  if (!bucket || now - bucket.windowStart > windowMs) {
+    rateLimitBuckets.set(ip, { count: 1, windowStart: now });
+    return false;
+  }
+  bucket.count += 1;
+  return bucket.count > limit;
+}
+// ------------------------------------------------------------------------
+
 // Health check endpoint
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -32,6 +89,14 @@ app.get('/api/health', (_req, res) => {
 // Gemini AI Management Hub Endpoint
 app.post('/api/gemini/manage', async (req, res) => {
   try {
+    if (isRateLimited(req.ip || 'unknown')) {
+      return res.status(429).json({ success: false, error: 'Too many requests. Please try again in a minute.' });
+    }
+    const authCheck = await verifyAdminAuth(req);
+    if (!authCheck.ok) {
+      return res.status(authCheck.status).json({ success: false, error: authCheck.error });
+    }
+
     const { action, prompt, siteConfig, eventsSummary } = req.body;
     
     if (!process.env.GEMINI_API_KEY) {
