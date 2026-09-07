@@ -7,24 +7,35 @@ service cloud.firestore {
       allow create: if request.auth != null;
       allow update, delete: if request.auth != null;
     }
-    
+
     // Community experiences and photos by event
     match /event_experiences/{expId} {
       allow read: if true;
       allow create, update: if true;
       allow delete: if request.auth != null;
     }
-    
+
     // User profile documents
     match /users/{userId} {
       allow read: if true;
       allow create, update: if true;
       allow delete: if request.auth != null && request.auth.uid == userId;
     }
-    
-    // Default fallback
+
+    // NOTE: removed the previous catch-all
+    //   match /{document=**} { allow read, write: if true; }
+    // That fallback made every OTHER collection in this Firestore project
+    // (including ones you might add later, and any name a bot happens to
+    // guess) fully world-readable AND world-writable with no auth check at
+    // all. It isn't needed for any collection this app actually uses
+    // (events / event_experiences / users are all already covered above),
+    // and it's a direct cost + abuse risk: anyone on the internet can point
+    // a script at your project and rack up unlimited reads/writes on any
+    // collection name, with nothing in these rules to stop them.
+    //
+    // Default-deny everything not explicitly matched above:
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
   }
 }
