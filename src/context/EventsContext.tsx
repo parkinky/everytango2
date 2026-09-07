@@ -1,11 +1,15 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { 
-  collection, 
-  onSnapshot, 
-  doc, 
-  setDoc, 
-  deleteDoc, 
-  updateDoc 
+import {
+  collection,
+  onSnapshot,
+  doc,
+  setDoc,
+  deleteDoc,
+  updateDoc,
+  query,
+  where,
+  orderBy,
+  limit,
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { TangoEvent, EventFilterState, EventType, EventStatus, CrawlingChannel } from '../types';
@@ -26,9 +30,9 @@ interface EventsContextType {
   rejectEvent: (id: string) => Promise<void>;
   deleteEvent: (id: string) => Promise<void>;
   updateEvent: (id: string, eventData: Partial<TangoEvent>) => Promise<{ success: boolean; error?: string }>;
-  runWeeklyCrawler: (customChannels?: CrawlingChannel[]) => Promise<{ 
-    addedCount: number; 
-    duplicateCount: number; 
+  runWeeklyCrawler: (customChannels?: CrawlingChannel[]) => Promise<{
+    addedCount: number;
+    duplicateCount: number;
     duplicatesDetails: string[];
     channelsCrawled?: string[];
     timeWindow?: string;
@@ -165,7 +169,46 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     let unsub = () => {};
     try {
       const eventsCol = collection(db, 'events');
-      unsub = onSnapshot(eventsCol, (snapshot) => {
+
+      // --- Cost guard --------------------------------------------------
+      // BEFORE: onSnapshot(eventsCol, ...) had no where/orderBy/limit, so
+      // every single page load re-downloaded the ENTIRE `events` collection
+      // (approved + pending + rejected, every event ever crawled or
+      // submitted). The collection only grows over time (weekly crawler +
+      // user submissions, nothing is ever archived), so Firestore read
+      // cost scaled with traffic AND with collection size at the same
+      // time - the single biggest driver of Firestore billing at scale.
+      //
+      // AFTER: only events ending within the last EVENTS_WINDOW_DAYS days,
+      // or still upcoming, are kept "live" - capped at EVENTS_QUERY_LIMIT
+      // documents. This matches what the UI actually shows by default
+      // (the default filter is "next 1 month"), so normal users see no
+      // difference, while worst-case read cost per session is now bounded
+      // instead of unbounded.
+      //
+      // NOTE: where('end_date', >=) + orderBy('end_date') are on the same
+      // field, so this does NOT require a new composite Firestore index -
+      // the default single-field index already covers it.
+      //
+      // Tune the two constants below if you need a longer lookback window
+      // or a higher cap (e.g. if the admin queue needs to see older
+      // pending submissions).
+      const EVENTS_WINDOW_DAYS = 180;
+      const EVENTS_QUERY_LIMIT = 1000;
+
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - EVENTS_WINDOW_DAYS);
+      const cutoffStr = cutoff.toISOString().split('T')[0];
+
+      const eventsQuery = query(
+        eventsCol,
+        where('end_date', '>=', cutoffStr),
+        orderBy('end_date', 'asc'),
+        limit(EVENTS_QUERY_LIMIT)
+      );
+      // -------------------------------------------------------------------
+
+      unsub = onSnapshot(eventsQuery, (snapshot) => {
         if (!snapshot.empty) {
           const list: TangoEvent[] = [];
           const existingIds = new Set<string>();
@@ -184,32 +227,40 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             existingIds.add(d.id);
           });
 
-          // Sync any new curated milongas to Firestore and merge if not yet stored
-          const mergedList = [...list];
-          INITIAL_EVENTS.forEach(async (ev) => {
-            if (!existingIds.has(ev.id)) {
+          // Seed curated milongas that aren't stored yet. Gated to run at
+          // most once per browser (localStorage flag): with a windowed
+          // query, a curated event that's already in Firestore but simply
+          // outside the live window would otherwise look "missing" on
+          // every load and get re-written every single session.
+          if (!localStorage.getItem('everytango_seeded_v2')) {
+            INITIAL_EVENTS.forEach(async (ev) => {
+              if (!existingIds.has(ev.id)) {
+                const { event: normalized } = normalizeEventForCountry(ev);
+                try {
+                  await setDoc(doc(db, 'events', ev.id), normalized);
+                } catch (e) {
+                  console.warn('Sync new event to firestore error:', e);
+                }
+              }
+            });
+            localStorage.setItem('everytango_seeded_v2', '1');
+          }
+
+          setEvents(list);
+          localStorage.setItem('everytango_events', JSON.stringify(list));
+        } else {
+          if (!localStorage.getItem('everytango_seeded_v2')) {
+            // If remote is empty, seed with initial curated events
+            INITIAL_EVENTS.forEach(async (ev) => {
               const { event: normalized } = normalizeEventForCountry(ev);
-              mergedList.push(normalized);
               try {
                 await setDoc(doc(db, 'events', ev.id), normalized);
               } catch (e) {
-                console.warn('Sync new event to firestore error:', e);
+                console.warn('Seeding remote event error:', e);
               }
-            }
-          });
-
-          setEvents(mergedList);
-          localStorage.setItem('everytango_events', JSON.stringify(mergedList));
-        } else {
-          // If remote empty, seed with initial curated events
-          INITIAL_EVENTS.forEach(async (ev) => {
-            const { event: normalized } = normalizeEventForCountry(ev);
-            try {
-              await setDoc(doc(db, 'events', ev.id), normalized);
-            } catch (e) {
-              console.warn('Seeding remote event error:', e);
-            }
-          });
+            });
+            localStorage.setItem('everytango_seeded_v2', '1');
+          }
           const normalizedInitial = INITIAL_EVENTS.map(e => normalizeEventForCountry(e).event);
           setEvents(normalizedInitial);
           localStorage.setItem('everytango_events', JSON.stringify(normalizedInitial));
@@ -370,8 +421,8 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       try {
         const localUsers: any[] = JSON.parse(localStorage.getItem('everytango_db_users') || '[]');
         const found = localUsers.find(
-          (u) => u.id === targetEvent.submitted_by || 
-                 u.username === targetEvent.submitted_by || 
+          (u) => u.id === targetEvent.submitted_by ||
+                 u.username === targetEvent.submitted_by ||
                  u.email === targetEvent.submitted_by
         );
         if (found?.email) {
@@ -490,9 +541,9 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   // Run weekly crawler & automated deduplication routine
   const runWeeklyCrawler = async (
     customChannels?: CrawlingChannel[]
-  ): Promise<{ 
-    addedCount: number; 
-    duplicateCount: number; 
+  ): Promise<{
+    addedCount: number;
+    duplicateCount: number;
     duplicatesDetails: string[];
     channelsCrawled?: string[];
     timeWindow?: string;
@@ -692,9 +743,9 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       console.warn('Could not update channel crawl stats in storage:', e);
     }
 
-    return { 
-      addedCount, 
-      duplicateCount, 
+    return {
+      addedCount,
+      duplicateCount,
       duplicatesDetails,
       channelsCrawled: activeChannels.map((c) => c.name),
       timeWindow: timeWindowDesc,
