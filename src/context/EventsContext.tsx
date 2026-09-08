@@ -12,7 +12,7 @@ import {
   orderBy,
   limit,
 } from 'firebase/firestore';
-import { db } from '../firebase';
+import { db, auth } from '../firebase';
 import { TangoEvent, EventFilterState, EventType, EventStatus, CrawlingChannel } from '../types';
 import { INITIAL_EVENTS } from '../initialData';
 import { isDuplicateEvent } from '../utils/dedup';
@@ -23,6 +23,19 @@ import { repairAndNormalizeEvent, getAuthenticVenueForCity } from '../utils/auth
 import { resolveDirectSourceUrl } from '../utils/sourceUrlResolver';
 import { doesEventMatchChannel } from '../utils/channelMatching';
 import { FACEBOOK_TANGO_COMMUNITIES } from '../data/facebookCommunities';
+
+// The crawler endpoints below are admin-only server routes (they make the
+// server fetch arbitrary third-party URLs, which is only safe to expose to
+// signed-in admins). Attach the caller's Firebase ID token so the server can
+// verify that; without it the server now rejects these requests.
+async function adminAuthHeaders(): Promise<Record<string, string>> {
+  try {
+    const idToken = await auth.currentUser?.getIdToken();
+    return idToken ? { Authorization: `Bearer ${idToken}` } : {};
+  } catch {
+    return {};
+  }
+}
 
 interface EventsContextType {
   events: TangoEvent[];
@@ -452,39 +465,18 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     let authorEmail = overrideEmail || targetEvent?.submitted_by_email;
     let authorName = targetEvent?.submitted_by_name;
 
-    // Look up submitter email in local user registry if not saved on event
-    if (!authorEmail && targetEvent?.submitted_by) {
-      try {
-        const localUsers: any[] = JSON.parse(localStorage.getItem('everytango_db_users') || '[]');
-        const found = localUsers.find(
-          (u) => u.id === targetEvent.submitted_by ||
-                 u.username === targetEvent.submitted_by ||
-                 u.email === targetEvent.submitted_by
-        );
-        if (found?.email) {
-          authorEmail = found.email;
-          if (!authorName) authorName = found.username;
-        }
-      } catch (e) {
-        console.warn('Lookup user email err:', e);
-      }
-    }
-
     // Check if submitted_by looks like an email itself
     if (!authorEmail && targetEvent?.submitted_by && targetEvent.submitted_by.includes('@')) {
       authorEmail = targetEvent.submitted_by;
     }
 
-    // Default fallback to admin email or current user email if available
+    // Default fallback to the currently signed-in (admin) user's email.
+    // (This used to read a locally-cached "fake user database" out of
+    // localStorage, which held whatever the browser happened to have seen
+    // and was never a reliable source of truth - real user lookups now go
+    // through the server, see AuthContext.tsx.)
     if (!authorEmail) {
-      try {
-        const customUser = JSON.parse(localStorage.getItem('everytango_custom_user') || '{}');
-        if (customUser?.email) {
-          authorEmail = customUser.email;
-        }
-      } catch (e) {
-        // ignore
-      }
+      authorEmail = auth.currentUser?.email || undefined;
     }
 
     if (authorEmail && targetEvent) {
@@ -744,7 +736,7 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       try {
         const resp = await fetch('/api/crawler/extract-site-events', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...(await adminAuthHeaders()) },
           body: JSON.stringify({
             url: channel.url,
             channelName: channel.name,
@@ -886,7 +878,7 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       try {
         const resp = await fetch('/api/crawler/validate-urls', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...(await adminAuthHeaders()) },
           body: JSON.stringify({
             candidates: validUpcomingCandidates.map((c) => ({
               id: c.id,
@@ -1025,7 +1017,7 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     try {
       const resp = await fetch('/api/crawler/validate-urls', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(await adminAuthHeaders()) },
         body: JSON.stringify({ candidates: eventsToValidate }),
       });
       if (resp.ok) {

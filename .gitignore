@@ -6,3 +6,10 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Firebase / GCP service account key files (Admin SDK credentials) - these
+# grant full server-side access to Firebase Auth + Firestore and must never
+# be committed, regardless of what they're named.
+*serviceAccountKey*.json
+*service-account*.json
+firebase-adminsdk-*.json

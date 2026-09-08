@@ -12,6 +12,15 @@ export interface UserSecurityQuestion {
   answer_hash: string; // SHA-256 normalized hash
 }
 
+// Shape sent by the client when registering: the plaintext answer, which the
+// server hashes (see /api/auth/register) before it is ever written to
+// Firestore. Never send a pre-computed answer_hash from the client.
+export interface RegisterSecurityQuestionInput {
+  question_number: 1 | 2 | 3;
+  question_text: string;
+  answer: string;
+}
+
 export interface UserProfile {
   id: string; // uid
   username: string;

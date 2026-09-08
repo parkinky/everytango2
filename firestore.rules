@@ -11,9 +11,21 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
-    // User profile documents
+    // User profile documents.
+    // SECURITY: these documents hold password hashes, security-question answer
+    // hashes, phone numbers and role flags. Direct client access is fully
+    // denied here on purpose - ALL reads and writes go through the trusted
+    // server (server.ts) using the Firebase Admin SDK, which authenticates
+    // via GOOGLE_APPLICATION_CREDENTIALS / Cloud Run's service account and
+    // therefore bypasses these rules entirely. That server enforces password
+    // hashing, security-question verification and admin-only role changes
+    // before ever touching this collection. See /api/auth/* and
+    // /api/admin/* in server.ts. Do NOT relax this to `if true` again -
+    // that previously let anyone on the internet read every user's email,
+    // phone number and (plaintext, pre-fix) password directly via the
+    // Firestore SDK/REST API, and let anyone promote themselves to ADMIN.
     match /users/{userId} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
 
     // NOTE: removed the previous catch-all

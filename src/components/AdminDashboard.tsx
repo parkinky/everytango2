@@ -486,9 +486,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
           city: userEditForm.city.trim(),
           role: userEditForm.role,
         };
-        if (trimmedPw) {
-          updates.password_hash = trimmedPw;
-        }
+        // Password changes always go through the dedicated, bcrypt-hashing
+        // reset endpoint (resetUserPasswordByAdmin) - a generic profile
+        // update is no longer allowed to touch password_hash server-side.
         const res = await updateUserProfile(editingUser.id, updates);
         if (trimmedPw) {
           await resetUserPasswordByAdmin(editingUser.id, trimmedPw);
@@ -2271,7 +2271,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                           </span>
                           <div>
                             <p className="font-semibold text-gray-800">{q.question_text}</p>
-                            <p className="text-[10px] font-mono text-gray-500">Hash: {q.answer_hash.substring(0, 16)}...</p>
+                            <p className="text-[10px] font-mono text-gray-400">🔒 answer hash not exposed to the client</p>
                           </div>
                         </div>
                       ))}

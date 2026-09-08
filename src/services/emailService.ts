@@ -1,4 +1,5 @@
 import { TangoEvent } from '../types';
+import { auth } from '../firebase';
 
 export interface EmailLog {
   id: string;
@@ -82,9 +83,19 @@ export async function sendApprovalNotificationEmail(
   };
 
   try {
+    // Admin-only endpoint - attach the caller's Firebase ID token.
+    let idToken: string | undefined;
+    try {
+      idToken = await auth.currentUser?.getIdToken();
+    } catch {
+      idToken = undefined;
+    }
     const res = await fetch('/api/email/send-approval', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
+      },
       body: JSON.stringify({
         to: authorEmail,
         authorName: recipientName,
