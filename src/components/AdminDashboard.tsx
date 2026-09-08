@@ -37,7 +37,10 @@ import {
   Camera,
   Copy,
   EyeOff,
-  Mail
+  Mail,
+  Facebook,
+  Download,
+  RotateCcw
 } from 'lucide-react';
 import { SupportedLanguage, TangoEvent, UserProfile, UserRole, EventType, EventStatus, CrawlingChannel } from '../types';
 import { translations, COUNTRY_LIST } from '../i18n';
@@ -48,6 +51,8 @@ import { formatTwoLineDate } from '../utils/dedup';
 import { formatTwoLineAddress, convertPriceToUSD, formatCrawledDate, formatDateToCST, formatDateTimeToCST } from '../utils/formatters';
 import { exportEventsToExcel } from '../utils/excelExport';
 import { EventSourceLink } from './EventSourceLink';
+import { FacebookSearchModal } from './FacebookSearchModal';
+import { SiteEventExtractorModal } from './SiteEventExtractorModal';
 
 interface AdminDashboardProps {
   currentLang: SupportedLanguage;
@@ -62,8 +67,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
     approveEvent, 
     rejectEvent, 
     deleteEvent, 
+    deleteMultipleEvents,
     addEventDirect,
+    resetAllEventsAndCrawlRecords,
     runWeeklyCrawler,
+    validateEventUrls,
     syncAuthenticVenues,
     stats 
   } = useEvents();
@@ -90,9 +98,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
     updateCronConfig, 
     addCronLog, 
     updateAllCrawlingChannels,
+    resetAllCrawlRecords,
     addCrawlingChannel,
     updateCrawlingChannel,
     deleteCrawlingChannel,
+    deleteUnexecutedChannels,
     toggleCrawlingChannel,
     autoUpdateCuratedNotice,
     callGeminiWebsiteManager 
@@ -113,6 +123,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
   const [eventSearchQuery, setEventSearchQuery] = useState('');
   const [adminEventSortField, setAdminEventSortField] = useState<'created_at' | 'start_date' | 'event_name'>('created_at');
   const [adminEventSortAsc, setAdminEventSortAsc] = useState<boolean>(false);
+  const [selectedEventIds, setSelectedEventIds] = useState<Set<string>>(new Set());
   const [isAddEventModalOpen, setIsAddEventModalOpen] = useState(false);
   const [newEventForm, setNewEventForm] = useState({
     event_name: '',
@@ -187,10 +198,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
     addedCount: number;
     duplicateCount: number;
     duplicatesDetails: string[];
+    invalidUrlCount?: number;
+    invalidUrlsDetails?: string[];
     channelsCrawled?: string[];
+    inactiveChannelsCount?: number;
     timeWindow?: string;
     updatedChannels?: CrawlingChannel[];
   } | null>(null);
+
+  // --- URL VALIDATION STATE FOR ADMIN EVENT TABLE ---
+  const [isValidatingUrls, setIsValidatingUrls] = useState(false);
+  const [urlValidationMap, setUrlValidationMap] = useState<Record<string, { isValid: boolean; reason: string }>>({});
 
   // --- CRAWLING CHANNELS STATE ---
   const [isChannelModalOpen, setIsChannelModalOpen] = useState(false);
@@ -208,6 +226,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
     description: '',
     enabled: true,
   });
+  const [isFacebookModalOpen, setIsFacebookModalOpen] = useState(false);
+  const [isExtractorModalOpen, setIsExtractorModalOpen] = useState(false);
+  const [extractorTargetChannel, setExtractorTargetChannel] = useState<CrawlingChannel | null>(null);
 
   // --- GEMINI TAB & CURATED NOTICE AUTO STATE ---
   const [geminiPrompt, setGeminiPrompt] = useState('');
@@ -319,6 +340,46 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
       variant: 'danger',
       onConfirm: async () => {
         await deleteEvent(id);
+        setSelectedEventIds((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+        setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+      },
+    });
+  };
+
+  // Toggle selection of an event for bulk deletion
+  const toggleSelectEvent = (id: string, checked: boolean) => {
+    setSelectedEventIds((prev) => {
+      const next = new Set(prev);
+      if (checked) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  };
+
+  // Batch Delete Handler triggered by DEL header button
+  const handleBatchDeleteClick = () => {
+    if (selectedEventIds.size === 0) {
+      alert('삭제할 라인을 먼저 체크박스로 선택해주세요.');
+      return;
+    }
+
+    setConfirmModal({
+      isOpen: true,
+      title: '선택 라인 영구 삭제 경고',
+      message: `선택한 모든 라인이 영원히 삭제된다.\n\n(선택된 라인: 총 ${selectedEventIds.size}건)\n선택하신 모든 이벤트가 영구 삭제되며 복구할 수 없습니다. 계속하시겠습니까?`,
+      confirmText: '예',
+      cancelText: '아니오',
+      variant: 'danger',
+      onConfirm: async () => {
+        await deleteMultipleEvents(Array.from(selectedEventIds));
+        setSelectedEventIds(new Set());
         setConfirmModal((prev) => ({ ...prev, isOpen: false }));
       },
     });
@@ -490,7 +551,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
     setChannelForm({
       name: '',
       url: '',
-      sourceType: 'WEBSITE',
+      sourceType: 'FACEBOOK',
       city: '',
       state: '',
       country_code: 'US',
@@ -525,8 +586,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
     if (editingChannel) {
       setConfirmModal({
         isOpen: true,
-        title: '크롤링 채널 수정 확인 (Confirm Channel Modification)',
-        message: `크롤링 대상 "${channelForm.name}"의 설정을 변경하시겠습니까?`,
+        title: '등록 사이트 수정 확인 (Edit Site Info)',
+        message: `등록 사이트 "${channelForm.name}"의 설정을 변경하시겠습니까?`,
         confirmText: '변경 적용 (Save)',
         cancelText: '취소',
         variant: 'primary',
@@ -564,8 +625,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
   const handleDeleteChannel = (channel: CrawlingChannel) => {
     setConfirmModal({
       isOpen: true,
-      title: '크롤링 채널 삭제 확인 (Delete Channel)',
-      message: `정말로 크롤링 대상 "${channel.name}"을(를) 삭제하시겠습니까?\n이 사이트는 향후 자동/수동 크롤링 대상에서 제외됩니다.`,
+      title: '등록 사이트 삭제 확인 (Delete Site)',
+      message: `정말로 등록 사이트 "${channel.name}"을(를) 삭제하시겠습니까?\n이 사이트는 향후 이벤트 내용 가져오기 대상에서 제외됩니다.`,
       confirmText: '삭제 (Delete)',
       cancelText: '취소',
       variant: 'danger',
@@ -576,39 +637,183 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
     });
   };
 
-  // Run Crawler Handler
-  const handleRunCrawler = async () => {
+  const unexecutedChannelsCount = (cronConfig.channels || []).filter((c) => !c.lastCrawledAt).length;
+
+  const handleDeleteUnexecutedChannels = () => {
+    if (unexecutedChannelsCount === 0) {
+      alert('최근 가져온 날짜가 "미실행"인 사이트가 없습니다.');
+      return;
+    }
+    setConfirmModal({
+      isOpen: true,
+      title: '미실행 사이트 일괄 삭제 확인',
+      message: `최근 가져온 날짜에 "미실행"으로 표시된 사이트 ${unexecutedChannelsCount}개를 목록에서 모두 삭제하시겠습니까?\n\n수작업으로 실행하지 않았거나 가져온 기록이 없는 사이트가 완전히 제거됩니다.`,
+      confirmText: '모두 삭제 (Delete All)',
+      cancelText: '취소',
+      variant: 'danger',
+      onConfirm: () => {
+        deleteUnexecutedChannels();
+        setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+        alert(`✅ 미실행 사이트 ${unexecutedChannelsCount}개가 모두 삭제되었습니다.`);
+      },
+    });
+  };
+
+  const [isResettingDatabase, setIsResettingDatabase] = useState(false);
+
+  // Completely wipe events and fetch records for a clean start
+  const handleResetDatabaseAndCrawler = async () => {
+    const confirmed = window.confirm(
+      '⚠️ [데이터베이스 및 이벤트 가져오기 기록 완전 삭제]\n\n' +
+      '기존 등록된 모든 이벤트 데이터와 모든 사이트의 이벤트 가져오기 기록을 영구적으로 삭제하고 초기화하시겠습니까?\n\n' +
+      '• 모든 이벤트 데이터(승인/대기/거절) 삭제\n' +
+      '• 사이트별 최근 가져온 날짜 및 누적 수 초기화 (미실행 / 0건)\n' +
+      '• 모든 화면 및 데이터베이스 날짜 양식: YYYY-MM-DD\n\n' +
+      '삭제 후 복구할 수 없습니다. 계속하시겠습니까?'
+    );
+
+    if (!confirmed) return;
+
+    setIsResettingDatabase(true);
+    try {
+      const res = await resetAllEventsAndCrawlRecords();
+      resetAllCrawlRecords();
+      alert(
+        `✅ 데이터베이스의 모든 이벤트와 가져오기 기록이 삭제되었습니다.\n\n` +
+        `• 정리된 이벤트: ${res.deletedCount}건\n` +
+        `• 사이트별 최근 가져온 기록: 초기화 완료 (미실행)\n` +
+        `• 날짜 양식: YYYY-MM-DD 적용 완료`
+      );
+    } catch (err: any) {
+      alert('초기화 중 오류가 발생했습니다: ' + (err?.message || String(err)));
+    } finally {
+      setIsResettingDatabase(false);
+    }
+  };
+
+  const [isExtractingSiteEvents, setIsExtractingSiteEvents] = useState(false);
+  const [extractingSiteChannelId, setExtractingSiteChannelId] = useState<string | null>(null);
+
+  // Unified Site Event Fetcher: Manual click or Cron execution
+  const handleFetchSiteEvents = async (targetChannel?: CrawlingChannel | null) => {
+    let targetChannels: CrawlingChannel[] = [];
+    if (targetChannel) {
+      targetChannels = [{ ...targetChannel, enabled: true }];
+      setExtractingSiteChannelId(targetChannel.id);
+    } else {
+      const active = (cronConfig.channels || []).filter((c) => c.enabled);
+      if (active.length > 0) {
+        targetChannels = active;
+      } else {
+        targetChannels = (cronConfig.channels || []).slice(0, 1);
+      }
+      setIsExtractingSiteEvents(true);
+    }
+
+    if (targetChannels.length === 0) {
+      alert('등록된 대상 사이트가 없습니다. 먼저 사이트를 등록해주세요.');
+      setIsExtractingSiteEvents(false);
+      setExtractingSiteChannelId(null);
+      return;
+    }
+
     setCrawlerRunning(true);
     setCrawlerResult(null);
     const startTime = Date.now();
+
     try {
-      const res = await runWeeklyCrawler(cronConfig.channels);
+      const res = await runWeeklyCrawler(targetChannels);
       setCrawlerResult(res);
 
-      // Immediately sync updated channels (with latest lastCrawledAt and discoveredCount) to state and storage
       if (res.updatedChannels && res.updatedChannels.length > 0) {
         updateAllCrawlingChannels(res.updatedChannels);
       }
 
+      const invalidText = res.invalidUrlCount ? `, ${res.invalidUrlCount}개 무효 주소 제외` : '';
       addCronLog({
         id: 'cron_' + Date.now(),
         timestamp: new Date().toISOString(),
         status: 'SUCCESS',
-        itemsDiscovered: res.addedCount + res.duplicateCount,
+        itemsDiscovered: res.addedCount + res.duplicateCount + (res.invalidUrlCount || 0),
         itemsAdded: res.addedCount,
         duplicatesBlocked: res.duplicateCount,
         durationMs: Date.now() - startTime,
-        message: `Crawl completed (${res.channelsCrawled?.length || 0} channels, registered in past 1-week window): ${res.addedCount} events sent to Pending Approval list (승인대상 목록), ${res.duplicateCount} duplicates blocked.`,
+        message: `[사이트 이벤트 내용 가져오기] (${targetChannels.map((c) => c.name).join(', ')}): ${res.addedCount}건이 승인대상 목록(PENDING)에 등록되었습니다 (${res.duplicateCount}건 중복 제외)${invalidText}.`,
       }, res.updatedChannels);
 
-      // Auto-update Curated Notice automatically upon crawler completion
+      // Auto-update Curated Notice automatically upon completion
       const approved = events.filter((e) => e.status === 'APPROVED');
       const cities = Array.from(new Set(approved.map((e) => e.city).filter(Boolean))).slice(0, 4);
       const cityStr = cities.length > 0 ? cities.join(', ') : 'Global Tango Hubs';
       const autoCurated = `${cityStr} verified festivals & milongas updated live (${approved.length} upcoming events verified).`;
       autoUpdateCuratedNotice(autoCurated);
+
+      const channelNames = targetChannels.map((c) => c.name).join(', ');
+      const hasWebsiteChannel = targetChannels.some((c) => c.sourceType === 'WEBSITE');
+      alert(
+        `✅ [사이트 이벤트 내용 가져오기 완료]\n\n` +
+        `• 대상 사이트: ${channelNames}${hasWebsiteChannel ? ' (공식 웹사이트 및 서브 사이트 검색 완료)' : ''}\n` +
+        `• 승인대상 목록(PENDING) 등록: ${res.addedCount}건\n` +
+        `• 최고가 옵션 비용 양식: ~$000 적용 완료\n` +
+        `• 중복/기존 등록 이벤트 제외: ${res.duplicateCount}건\n\n` +
+        `관리자 사전 승인 질문 없이 이벤트가 [승인대상 목록 (PENDING)] 탭으로 바로 등록되었습니다.\n상단 [이벤트 관리 > PENDING] 탭에서 검토 후 최종 승인(APPROVE)하실 수 있습니다.`
+      );
+    } catch (err: any) {
+      alert(`사이트 이벤트 내용 가져오기 중 오류가 발생했습니다: ${err?.message || String(err)}`);
     } finally {
+      setIsExtractingSiteEvents(false);
+      setExtractingSiteChannelId(null);
       setCrawlerRunning(false);
+    }
+  };
+
+  // Backward compatibility alias
+  const handleExtractSiteEventsDirectly = handleFetchSiteEvents;
+  const handleRunCrawler = () => handleFetchSiteEvents(null);
+
+  // Audit and validate URLs of events currently displayed in Admin Table
+  const handleAuditTableUrls = async () => {
+    const targetEvents = filteredEventsForAdmin;
+    if (targetEvents.length === 0) {
+      alert('검사할 이벤트가 없습니다.');
+      return;
+    }
+    setIsValidatingUrls(true);
+    try {
+      const candidates = targetEvents.map((ev) => ({
+        id: ev.id,
+        url: ev.source_url || '',
+        eventName: ev.event_name,
+        startDate: ev.start_date,
+      }));
+      const results = await validateEventUrls(candidates);
+      const newMap: Record<string, { isValid: boolean; reason: string }> = {};
+      let invalidCount = 0;
+      const invalidIds: string[] = [];
+
+      results.forEach((r) => {
+        if (r.id) {
+          newMap[r.id] = { isValid: r.isValid, reason: r.reason };
+          if (!r.isValid) {
+            invalidCount++;
+            invalidIds.push(r.id);
+          }
+        }
+      });
+      setUrlValidationMap(newMap);
+
+      if (invalidCount > 0) {
+        setSelectedEventIds((prev) => new Set([...prev, ...invalidIds]));
+        alert(
+          `검사 완료: 총 ${targetEvents.length}건 중 사이트 주소가 유효하지 않거나 종료/만료된 이벤트 ${invalidCount}건이 감지되었습니다.\n\n해당 항목들은 테이블에 [URL 오류/종료됨] 붉은 태그로 표시되며, DEL 삭제 선택 목록에 자동 추가되었습니다. 원하시면 [선택 삭제 (DEL)] 버튼을 눌러 일괄 삭제할 수 있습니다.`
+        );
+      } else {
+        alert(`검사 완료: 현재 목록의 ${targetEvents.length}건 모든 웹사이트 주소가 정상적으로 응답하고 있습니다.`);
+      }
+    } catch (err: any) {
+      alert('URL 검사 중 오류가 발생했습니다: ' + (err?.message || err));
+    } finally {
+      setIsValidatingUrls(false);
     }
   };
 
@@ -696,6 +901,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
 
   // Filter events for Event Management tab
   const filteredEventsForAdmin = events.filter((ev) => {
+    // Exclude any events where CRAWLED date is before 2026-09-06
+    const crawled = formatCrawledDate(ev.created_at);
+    if (crawled.date && crawled.date !== '—' && crawled.date < '2026-09-06') {
+      return false;
+    }
     if (eventFilterStatus !== 'ALL' && ev.status !== eventFilterStatus) {
       return false;
     }
@@ -1070,7 +1280,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
           }`}
         >
           <Clock className="w-4 h-4 text-amber-600" />
-          <span>Crawler & Cron Jobs</span>
+          <span>사이트 이벤트 가져오기 (Cron)</span>
         </button>
 
         <button
@@ -1161,6 +1371,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                 <span>{isSyncingVenues ? '동기화 중...' : 'Sync Venues'}</span>
               </button>
 
+              {/* Validate URLs Button */}
+              <button
+                onClick={handleAuditTableUrls}
+                disabled={isValidatingUrls}
+                className="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors shrink-0 cursor-pointer disabled:opacity-50"
+                title="현재 목록 이벤트들의 웹사이트 주소 유효성 및 활성 상태 일괄 검사"
+              >
+                <Globe className={`w-3.5 h-3.5 ${isValidatingUrls ? 'animate-spin' : ''}`} />
+                <span>{isValidatingUrls ? '주소 검사 중...' : 'URL 검사'}</span>
+              </button>
+
               {/* Add New Event Direct Button */}
               <button
                 onClick={() => setIsAddEventModalOpen(true)}
@@ -1187,7 +1408,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                           setAdminEventSortAsc(true);
                         }
                       }}
-                      className="w-[12%] py-2.5 px-2.5 cursor-pointer hover:text-gray-900 transition-colors select-none"
+                      className="w-[11.8%] py-2.5 pl-2.5 pr-0.5 cursor-pointer hover:text-gray-900 transition-colors select-none"
                       title="행사일 기준 정렬"
                     >
                       <div className="flex items-center gap-1">
@@ -1208,7 +1429,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                           setAdminEventSortAsc(false);
                         }
                       }}
-                      className="w-[11%] py-2.5 px-2 cursor-pointer hover:text-gray-900 transition-colors select-none"
+                      className="w-[7.6%] py-2.5 px-1 cursor-pointer hover:text-gray-900 transition-colors select-none"
                       title="검색된 일자 기준 정렬"
                     >
                       <div className="flex items-center gap-1">
@@ -1221,7 +1442,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                       </div>
                     </th>
 
-                    <th className="w-[7%] py-2.5 px-1.5 text-center">Type</th>
+                    <th className="w-[5.5%] py-2.5 px-1 text-center">Type</th>
 
                     <th 
                       onClick={() => {
@@ -1232,7 +1453,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                           setAdminEventSortAsc(true);
                         }
                       }}
-                      className="w-[24%] py-2.5 px-3 cursor-pointer hover:text-gray-900 transition-colors select-none"
+                      className="w-[22.4%] py-2.5 pl-4 pr-2 cursor-pointer hover:text-gray-900 transition-colors select-none"
                       title="행사명 기준 정렬"
                     >
                       <div className="flex items-center gap-1">
@@ -1243,17 +1464,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                       </div>
                     </th>
 
-                    <th className="w-[21%] py-2.5 px-2.5">Location & Address</th>
-                    <th className="w-[5%] py-2.5 px-1.5 text-right">Price</th>
-                    <th className="w-[7%] py-2.5 px-1.5 text-center">Status</th>
-                    <th className="w-[4%] py-2.5 px-1 text-center hidden sm:table-cell">Src</th>
-                    <th className="w-[9%] py-2.5 px-2 text-right">Actions</th>
+                    <th className="w-[19.2%] py-2.5 px-2">Location & Address</th>
+                    <th className="w-[5%] py-2.5 px-1 text-right">Price</th>
+                    <th className="w-[7%] py-2.5 px-1 text-center">Status</th>
+                    <th className="w-[3.5%] py-2.5 px-1 text-center hidden sm:table-cell">Src</th>
+                    <th className="w-[12%] py-2.5 px-2 text-right">Actions</th>
+
+                    {/* DEL Header Button Column */}
+                    <th className="w-[6%] py-1.5 px-1 text-center align-middle">
+                      <button
+                        type="button"
+                        onClick={handleBatchDeleteClick}
+                        className={`w-full max-w-[54px] mx-auto py-1 px-1 rounded font-black text-[11px] tracking-wider shadow-xs transition-all cursor-pointer flex items-center justify-center gap-0.5 ${
+                          selectedEventIds.size > 0
+                            ? 'bg-red-600 hover:bg-red-700 text-white animate-pulse ring-2 ring-red-400'
+                            : 'bg-red-600 hover:bg-red-700 text-white'
+                        }`}
+                        title="선택한 라인 영구 삭제 (DEL)"
+                      >
+                        <Trash2 className="w-3 h-3 shrink-0" />
+                        <span>DEL</span>
+                        {selectedEventIds.size > 0 && (
+                          <span className="ml-0.5 px-1 py-0.2 rounded-full bg-white text-red-700 text-[9px] font-black">
+                            {selectedEventIds.size}
+                          </span>
+                        )}
+                      </button>
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {sortedEventsForAdmin.length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="py-8 text-center text-gray-400 text-xs">
+                      <td colSpan={10} className="py-8 text-center text-gray-400 text-xs">
                         No events found matching current criteria.
                       </td>
                     </tr>
@@ -1265,24 +1508,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                       const crawled = formatCrawledDate(ev.created_at);
 
                       return (
-                        <tr key={ev.id} className="hover:bg-gray-50/80 transition-colors">
+                        <tr key={ev.id} className={`hover:bg-gray-50/80 transition-colors ${selectedEventIds.has(ev.id) ? 'bg-red-50/50' : ''}`}>
                           
                           {/* Date (2 Lines: Start date, ~ End date for compact single screen view) */}
-                          <td className="py-2.5 px-2.5 whitespace-nowrap font-medium align-middle">
+                          <td className="py-2.5 pl-2.5 pr-0.5 whitespace-nowrap font-medium align-middle">
                             <div className="flex flex-col font-mono text-xs leading-tight">
-                              <span className="text-gray-900 font-semibold truncate">{start}</span>
-                              {end && <span className="text-gray-500 text-[10px] truncate">{end}</span>}
+                              <span className="text-gray-900 font-semibold">{start}</span>
+                              {end && <span className="text-gray-500 text-[10px]">{end}</span>}
                             </div>
                           </td>
 
                           {/* 검색된 일자 (Discovered / Crawled Date) */}
-                          <td className="py-2.5 px-2 whitespace-nowrap font-medium align-middle">
+                          <td className="py-2.5 px-1 whitespace-nowrap font-medium align-middle">
                             <div className="flex flex-col font-mono text-[11px] leading-tight">
-                              <span className="text-gray-900 font-semibold truncate" title={crawled.date}>
+                              <span className="text-gray-900 font-semibold" title={crawled.date}>
                                 {crawled.date}
                               </span>
                               {crawled.time && (
-                                <span className="text-gray-500 text-[10px] truncate" title={crawled.time}>
+                                <span className="text-gray-500 text-[10px]" title={crawled.time}>
                                   {crawled.time}
                                 </span>
                               )}
@@ -1290,22 +1533,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                           </td>
 
                           {/* Type */}
-                          <td className="py-2.5 px-1.5 whitespace-nowrap text-center align-middle">
+                          <td className="py-2.5 px-1 whitespace-nowrap text-center align-middle">
                             <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-700 border border-gray-200">
                               {ev.event_type}
                             </span>
                           </td>
 
                           {/* Event Name & Link */}
-                          <td className="py-2.5 px-3 font-bold text-gray-900 align-middle">
+                          <td className="py-2.5 pl-4.5 pr-2.5 font-bold text-gray-900 align-middle">
                             <div className="flex items-center gap-1.5 min-w-0">
                               <span className="truncate block" title={ev.event_name}>{ev.event_name}</span>
                               <EventSourceLink event={ev} showDropdown={false} />
+                              {urlValidationMap[ev.id] && !urlValidationMap[ev.id].isValid && (
+                                <span
+                                  className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 text-[10px] font-bold border border-red-300 shrink-0 cursor-help whitespace-nowrap"
+                                  title={`[웹사이트 주소 무효 / 행사 종료]: ${urlValidationMap[ev.id].reason}`}
+                                >
+                                  무효 URL
+                                </span>
+                              )}
+                              {urlValidationMap[ev.id] && urlValidationMap[ev.id].isValid && (
+                                <span
+                                  className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 text-[10px] font-bold border border-emerald-300 shrink-0 cursor-help whitespace-nowrap"
+                                  title="사이트 주소 정상 확인 완료"
+                                >
+                                  정상
+                                </span>
+                              )}
                             </div>
                           </td>
 
                           {/* Location & Address in 2 lines */}
-                          <td className="py-2.5 px-2.5 leading-tight align-middle">
+                          <td className="py-2.5 px-2 leading-tight align-middle">
                             <div className="font-semibold text-gray-900 truncate" title={addr.locationLine}>
                               {addr.locationLine}
                             </div>
@@ -1315,7 +1574,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                           </td>
 
                           {/* Price in USD */}
-                          <td className="py-2.5 px-2 whitespace-nowrap font-semibold text-right align-middle">
+                          <td className="py-2.5 px-1 whitespace-nowrap font-semibold text-right align-middle">
                             <div className="leading-tight">
                               <span className={`font-mono text-xs font-bold ${usd.isFree ? 'text-green-600' : 'text-gray-900'}`}>
                                 {usd.usdFormatted}
@@ -1329,7 +1588,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                           </td>
 
                           {/* Status */}
-                          <td className="py-2.5 px-1.5 whitespace-nowrap text-center align-middle">
+                          <td className="py-2.5 px-1 whitespace-nowrap text-center align-middle">
                             {ev.status === 'APPROVED' && (
                               <span className="px-1.5 py-0.5 rounded-full bg-green-50 text-green-700 text-[10px] font-bold border border-green-200">
                                 APPROVED
@@ -1471,6 +1730,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
                             </div>
+                          </td>
+
+                          {/* DEL Checkbox Column */}
+                          <td className="py-2.5 px-1 whitespace-nowrap text-center align-middle">
+                            <input
+                              type="checkbox"
+                              checked={selectedEventIds.has(ev.id)}
+                              onChange={(e) => toggleSelectEvent(ev.id, e.target.checked)}
+                              className="w-4 h-4 text-red-600 rounded border-gray-300 focus:ring-red-500 cursor-pointer accent-red-600 transition-colors"
+                              aria-label={`Select ${ev.event_name} for deletion`}
+                            />
                           </td>
 
                         </tr>
@@ -2362,17 +2632,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                   <span>CRON SCHEDULER CONTROLLER</span>
                 </div>
                 <h3 className="text-xl font-extrabold text-gray-900 tracking-tight">
-                  Automated Crawler & Cron Schedule Settings
+                  사이트 이벤트 자동 가져오기 및 크론 스케줄 설정
                 </h3>
                 <p className="text-xs text-gray-500 mt-0.5">
-                  Configure the scheduled background crawler, duplicate filtering threshold, and crawl sources.
+                  등록된 사이트(페이스북 페이지/그룹, 웹사이트)의 예정 행사 내용을 자동으로 가져와 [승인대상 목록(PENDING)]으로 등록하는 주기와 중복 필터링을 설정합니다.
                 </p>
               </div>
 
               {/* Toggle Switch: Active vs Paused */}
               <div className="flex items-center gap-3">
                 <span className="text-xs font-bold text-gray-700">
-                  Scheduler: {cronConfig.enabled ? '🟢 Active' : '⏸️ Paused'}
+                  크론 스케줄러: {cronConfig.enabled ? '🟢 활성 (매주 금요일 01:00 AM CST)' : '⏸️ 일시정지 (Paused)'}
                 </span>
                 <button
                   onClick={() => updateCronConfig({ enabled: !cronConfig.enabled })}
@@ -2395,7 +2665,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
               {/* Cron Frequency Preset */}
               <div className="space-y-2 p-4 rounded-xl bg-gray-50 border border-gray-200">
                 <label className="block font-bold text-gray-800">
-                  Execution Frequency Preset
+                  자동 실행 주기 (Execution Frequency Preset)
                 </label>
                 <select
                   value={cronConfig.frequencyPreset}
@@ -2416,7 +2686,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                   }}
                   className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-xs font-semibold text-gray-800 focus:outline-none focus:border-red-600"
                 >
-                  <option value="weekly_fri_0100">Weekly on Friday 01:00 AM (US Central - Active)</option>
+                  <option value="weekly_fri_0100">매주 금요일 새벽 1시 (Weekly on Friday 01:00 AM CST - 기본 활성)</option>
                   <option value="weekly_mon">Weekly on Monday 02:00</option>
                   <option value="daily_0200">Daily at 02:00</option>
                   <option value="daily_0400">Daily at 04:00</option>
@@ -2425,14 +2695,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                   <option value="custom">Custom Cron Expression</option>
                 </select>
                 <p className="text-[11px] text-gray-500">
-                  Current cron expression: <code className="font-mono font-bold text-red-600">{cronConfig.cronExpression}</code>
+                  현재 크론 표현식: <code className="font-mono font-bold text-red-600">{cronConfig.cronExpression}</code> (서버 백엔드 node-cron 연동)
                 </p>
               </div>
 
               {/* Timezone & Time Window */}
               <div className="space-y-2 p-4 rounded-xl bg-gray-50 border border-gray-200">
                 <label className="block font-bold text-gray-800">
-                  Reference Timezone
+                  기준 시간대 (Reference Timezone)
                 </label>
                 <select
                   value={cronConfig.timezone}
@@ -2448,14 +2718,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                   <option value="Europe/Paris">Europe/Paris (CET)</option>
                 </select>
                 <p className="text-[11px] text-gray-500">
-                  Data discovery window: <strong className="text-gray-900">Today ~ +6 Months</strong>
+                  행사 추출 기간: <strong className="text-gray-900">오늘 ~ +6개월 예정 행사</strong>
                 </p>
               </div>
 
               {/* Deduplication Similarity Threshold */}
               <div className="space-y-2 p-4 rounded-xl bg-gray-50 border border-gray-200">
                 <div className="flex items-center justify-between">
-                  <label className="font-bold text-gray-800">Duplicate Similarity Threshold</label>
+                  <label className="font-bold text-gray-800">중복 필터링 유사도 기준</label>
                   <span className="font-mono font-bold text-red-600">
                     {(cronConfig.similarityThreshold * 100).toFixed(0)}%
                   </span>
@@ -2470,51 +2740,68 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                   className="w-full accent-red-600 cursor-pointer"
                 />
                 <p className="text-[11px] text-gray-500">
-                  If date & city match and event name similarity is {(cronConfig.similarityThreshold * 100).toFixed(0)}% or higher, it is blocked as duplicate.
+                  날짜 및 도시가 일치하고 행사명 유사도가 {(cronConfig.similarityThreshold * 100).toFixed(0)}% 이상이면 중복으로 자동 제외됩니다.
                 </p>
               </div>
 
             </div>
 
-            {/* Data Crawling Channels & Target Sources Section */}
+            {/* Target Sites Section */}
             <div className="p-5 rounded-2xl bg-gray-50 border border-gray-200 space-y-4 text-xs">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-gray-200">
                 <div>
                   <div className="flex items-center gap-2">
                     <Radio className="w-4 h-4 text-red-600" />
                     <h4 className="font-extrabold text-sm text-gray-900 tracking-tight">
-                      Data Crawling Channels & Target Sources (크롤링 대상 채널 관리)
+                      사이트 이벤트 내용 가져오기 대상 사이트 목록 (등록 사이트 관리)
                     </h4>
                   </div>
                   <p className="text-[11px] text-gray-500 mt-0.5">
-                    크롤링시 활성화된 각 사이트에서 <strong className="text-gray-900">최근 1주일(Past 7 Days) 동안 등록된</strong> 신규 행사 정보를 검색하여 <strong className="text-red-700 font-semibold">[승인대상 목록 (PENDING)]</strong>에 자동 등록합니다.
+                    관리자가 등록한 페이스북 페이지/그룹, 웹사이트 주소에서 <strong className="text-gray-900">개최 예정인 행사 내용(이름, 일시, 장소)만</strong> 가져와 <strong className="text-red-700 font-semibold">[승인대상 목록 (PENDING)]</strong>에 바로 등록합니다.
                   </p>
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
-                  <div className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-red-50 text-red-700 border border-red-200 font-bold text-[11px]">
-                    <Clock className="w-3 h-3" />
-                    <span>최근 1주일 등록 검색</span>
-                  </div>
                   <div className="px-2.5 py-1 rounded-lg bg-white border border-gray-200 text-gray-700 font-bold text-[11px]">
                     {(cronConfig.channels || []).filter((c) => c.enabled).length} / {(cronConfig.channels || []).length} 활성
                   </div>
                   <button
                     type="button"
-                    onClick={handleRunCrawler}
-                    disabled={crawlerRunning}
-                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-400 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
-                    title="현재 Active로 되어 있는 모든 사이트에서 최근 1주일 동안 등록된 신규 행사 정보를 검색하고 최근 크롤링 날짜를 업데이트합니다"
+                    onClick={() => handleFetchSiteEvents(null)}
+                    disabled={crawlerRunning || isExtractingSiteEvents}
+                    className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
+                    title="등록된 사이트에 접근하여 화면에 보이는 내용(이벤트 이름, 날짜, 시간)을 추출하여 관리자 사전 승인 확인 없이 승인대상 목록(PENDING)으로 바로 보냅니다"
                   >
-                    <Play className={`w-3.5 h-3.5 ${crawlerRunning ? 'animate-spin' : ''}`} />
-                    <span>{crawlerRunning ? '크롤링 중...' : '활성 채널 즉시 크롤링'}</span>
+                    <Download className={`w-3.5 h-3.5 ${isExtractingSiteEvents || crawlerRunning ? 'animate-spin' : ''}`} />
+                    <span>{isExtractingSiteEvents || crawlerRunning ? '가져오는 중...' : '사이트 이벤트 내용 가져오기'}</span>
                   </button>
                   <button
                     onClick={handleOpenAddChannel}
                     className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5" />
-                    <span>채널 추가</span>
+                    <span>+ 사이트 추가</span>
+                  </button>
+                  {unexecutedChannelsCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleDeleteUnexecutedChannels}
+                      className="px-3 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-300 text-rose-700 font-bold text-xs shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                      title="최근 가져온 날짜에 '미실행'으로 표시된 사이트를 목록에서 모두 삭제합니다"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                      <span>미실행 사이트 일괄 삭제 ({unexecutedChannelsCount})</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleResetDatabaseAndCrawler}
+                    disabled={isResettingDatabase}
+                    className="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-rose-50 border border-gray-300 hover:border-rose-300 text-gray-700 hover:text-rose-700 font-bold text-xs shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    title="기존 데이터베이스의 모든 이벤트와 가져오기 기록을 삭제하고 YYYY-MM-DD 양식으로 다시 시작합니다"
+                  >
+                    <RotateCcw className={`w-3.5 h-3.5 ${isResettingDatabase ? 'animate-spin text-rose-600' : 'text-gray-500'}`} />
+                    <span>{isResettingDatabase ? '초기화 진행 중...' : '데이터 및 가져오기 기록 삭제/초기화'}</span>
                   </button>
                 </div>
               </div>
@@ -2586,14 +2873,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                         </div>
                       </th>
 
-                      {/* 4. 채널이름 */}
+                      {/* 4. 사이트 이름 */}
                       <th 
                         onClick={() => handleChannelSort('name')}
                         className="py-2.5 px-2 w-[23%] whitespace-nowrap cursor-pointer hover:text-gray-900 transition-colors select-none"
-                        title="채널이름 기준 정렬"
+                        title="사이트 이름 기준 정렬"
                       >
                         <div className="flex items-center gap-1">
-                          <span>채널이름</span>
+                          <span>사이트 이름</span>
                           {channelSortField === 'name' ? (
                             <span className="text-red-600 font-bold">{channelSortAsc ? '↑' : '↓'}</span>
                           ) : (
@@ -2618,23 +2905,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                         </div>
                       </th>
 
-                      {/* 6. 최근크롤링날짜 (tight width, text-center) */}
-                      <th className="py-2.5 px-1.5 w-[86px] text-center whitespace-nowrap">최근크롤링날짜</th>
-                      {/* 7. 누적 발견수 (tight width, centered to eliminate empty gap with date) */}
-                      <th className="py-2.5 px-1 w-[64px] text-center whitespace-nowrap">누적 발견수</th>
-                      {/* 8. 수정 */}
+                      {/* 6. 최근가져온날짜 (tight width, text-center) */}
+                      <th className="py-2.5 px-1.5 w-[86px] text-center whitespace-nowrap">최근가져온날짜</th>
+                      {/* 7. 누적 가져온수 (tight width, centered to eliminate empty gap with date) */}
+                      <th className="py-2.5 px-1 w-[64px] text-center whitespace-nowrap">누적 가져온수</th>
+                      {/* 8. 내용 가져오기 */}
+                      <th className="py-2.5 px-1 w-[38px] text-center whitespace-nowrap" title="등록 사이트에서 이벤트 내용(이름, 날짜, 시간) 가져오기">가져오기</th>
+                      {/* 9. 수정 */}
                       <th className="py-2.5 px-1 w-[34px] text-center whitespace-nowrap">수정</th>
-                      {/* 9. 폐기 */}
+                      {/* 10. 폐기 */}
                       <th className="py-2.5 px-1 w-[34px] text-center whitespace-nowrap">폐기</th>
-                      {/* 10. Active */}
+                      {/* 11. Active */}
                       <th className="py-2.5 px-1.5 w-[48px] text-center whitespace-nowrap">Active</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {sortedChannels.length === 0 ? (
                       <tr>
-                        <td colSpan={10} className="py-8 text-center text-gray-400 text-xs">
-                          등록되거나 검색된 채널이 없습니다.
+                        <td colSpan={11} className="py-8 text-center text-gray-400 text-xs">
+                          등록되거나 검색된 사이트가 없습니다.
                         </td>
                       </tr>
                     ) : (
@@ -2731,25 +3020,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                               {ch.discoveredCount || 0}건
                             </td>
 
-                            {/* 8. 수정 버튼 */}
+                            {/* 8. 내용 가져오기 버튼 */}
+                            <td className="py-2.5 px-1 text-center whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => handleFetchSiteEvents(ch)}
+                                disabled={crawlerRunning || isExtractingSiteEvents || extractingSiteChannelId === ch.id}
+                                className="p-1.5 rounded-lg text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 transition-colors cursor-pointer inline-flex items-center justify-center disabled:opacity-40"
+                                title={`${ch.name} 등록 사이트 이벤트 내용(이름·날짜·시간)을 가져와 승인대상 목록(PENDING)으로 바로 보냅니다`}
+                              >
+                                <Download className={`w-3.5 h-3.5 ${extractingSiteChannelId === ch.id ? 'animate-spin text-indigo-700' : ''}`} />
+                              </button>
+                            </td>
+
+                            {/* 9. 수정 버튼 */}
                             <td className="py-2.5 px-1 text-center whitespace-nowrap">
                               <button
                                 type="button"
                                 onClick={() => handleOpenEditChannel(ch)}
                                 className="p-1.5 rounded-lg text-gray-500 hover:text-blue-600 hover:bg-blue-50 transition-colors cursor-pointer inline-flex items-center justify-center"
-                                title="채널 수정"
+                                title="사이트 수정"
                               >
                                 <Edit3 className="w-3.5 h-3.5" />
                               </button>
                             </td>
 
-                            {/* 9. 폐기 버튼 */}
+                            {/* 10. 폐기 버튼 */}
                             <td className="py-2.5 px-1 text-center whitespace-nowrap">
                               <button
                                 type="button"
                                 onClick={() => handleDeleteChannel(ch)}
                                 className="p-1.5 rounded-lg text-gray-500 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer inline-flex items-center justify-center"
-                                title="채널 폐기"
+                                title="사이트 폐기"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
@@ -2763,7 +3065,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                                 className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors cursor-pointer align-middle ${
                                   ch.enabled ? 'bg-red-600' : 'bg-gray-300'
                                 }`}
-                                title={ch.enabled ? '채널 비활성화' : '채널 활성화'}
+                                title={ch.enabled ? '사이트 비활성화' : '사이트 활성화'}
                               >
                                 <span
                                   className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
@@ -2779,10 +3081,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                 </table>
               </div>
 
-              <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-[11px] leading-relaxed flex items-start gap-2">
-                <AlertCircle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+              <div className="p-3 rounded-xl bg-blue-50 border border-blue-200 text-blue-950 text-[11px] leading-relaxed flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-blue-700 shrink-0 mt-0.5" />
                 <div>
-                  <strong>자동/수동 크롤링 검색 기준:</strong> 크롤링 실행 시 각 채널 사이트에서 <strong>최근 1주일(Past 7 Days) 동안 등록된</strong> 신규 행사 정보를 검색하여 중복 검사한 뒤, <strong>승인대상 목록 (PENDING)</strong>으로 등록합니다. 등록된 이벤트는 상단 <strong>[이벤트 관리 &gt; PENDING]</strong> 탭에서 승인 또는 반려하실 수 있습니다.
+                  <strong>이벤트 내용 가져오기 조건:</strong> 관리자가 등록한 <strong>공식 웹사이트/블로그(서브 사이트 자동 탐색 포함)</strong> 및 페이스북 커뮤니티에서 조회되는 다가오는 행사(개최 예정 행사)의 <strong>이벤트 제목, 일정, 비용(가장 높은 옵션의 금액을 "~$000" 양식으로 표시)</strong> 데이터를 가져와 <strong>승인대상 목록 (PENDING)</strong>으로 자동 등록합니다. 수집된 이벤트는 상단 <strong>[이벤트 관리 &gt; PENDING]</strong> 탭에서 관리자가 검토 후 승인(APPROVE) 또는 반려하실 수 있습니다.
                 </div>
               </div>
             </div>
@@ -2791,40 +3093,61 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
             <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-t border-gray-100">
               <div className="text-xs text-gray-500 space-y-0.5 font-mono">
                 <p>Last run: <strong className="text-gray-800 font-semibold">{cronConfig.lastRunAt ? formatDateTimeToCST(cronConfig.lastRunAt) : 'None'}</strong></p>
-                <p>Next scheduled: <strong className="text-gray-800 font-semibold">{cronConfig.nextRunAt ? formatDateTimeToCST(cronConfig.nextRunAt) : formatDateTimeToCST('2026-09-11T06:00:00Z')}</strong></p>
+                <p>Next scheduled: <strong className="text-gray-800 font-semibold">{cronConfig.nextRunAt ? formatDateTimeToCST(cronConfig.nextRunAt) : formatDateTimeToCST('2026-09-11T06:00:00Z')}</strong> (매주 금요일 01:00 AM CST)</p>
               </div>
 
               <button
-                onClick={handleRunCrawler}
-                disabled={crawlerRunning}
-                className="px-5 py-2.5 rounded-lg bg-red-600 hover:bg-red-700 active:bg-red-800 text-white text-xs font-bold shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                onClick={() => handleFetchSiteEvents(null)}
+                disabled={crawlerRunning || isExtractingSiteEvents}
+                className="px-5 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white text-xs font-bold shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer disabled:bg-gray-400"
               >
-                <RefreshCw className={`w-4 h-4 ${crawlerRunning ? 'animate-spin' : ''}`} />
-                <span>{crawlerRunning ? '최근 1주일 등록 데이터 검색 및 크롤링 중...' : 'Run Crawler Now (수동 크롤링 실행)'}</span>
+                <Download className={`w-4 h-4 ${crawlerRunning || isExtractingSiteEvents ? 'animate-spin' : ''}`} />
+                <span>{crawlerRunning || isExtractingSiteEvents ? '가져오는 중...' : '사이트 이벤트 내용 지금 가져오기'}</span>
               </button>
             </div>
 
-            {/* Crawler Result Feedback Box */}
+            {/* Extraction Result Feedback Box */}
             {crawlerResult && (
               <div className="p-5 rounded-xl bg-white border border-gray-200 space-y-3.5 text-xs shadow-xs animate-in fade-in duration-200">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-gray-100">
                   <div className="flex items-center gap-2 text-green-700 font-extrabold text-sm">
                     <CheckCircle2 className="w-5 h-5 text-green-600" />
-                    <span>크롤링 및 최근 1주일 등록 데이터 검색 완료!</span>
+                    <span>등록 사이트({crawlerResult.channelsCrawled?.length || 0}개) 이벤트 내용 가져오기 완료!</span>
                   </div>
-                  {crawlerResult.timeWindow && (
-                    <span className="px-2.5 py-0.5 rounded-full bg-gray-100 text-gray-700 font-mono text-[11px] font-semibold">
-                      검색 기간: {crawlerResult.timeWindow}
-                    </span>
-                  )}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {crawlerResult.inactiveChannelsCount !== undefined && crawlerResult.inactiveChannelsCount > 0 && (
+                      <span className="px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200 text-[11px] font-semibold">
+                        비활성 {crawlerResult.inactiveChannelsCount}개 사이트 제외됨 (Active: OFF)
+                      </span>
+                    )}
+                    {crawlerResult.timeWindow && (
+                      <span className="px-2.5 py-0.5 rounded-full bg-gray-100 text-gray-700 font-mono text-[11px] font-semibold">
+                        행사 기간: {crawlerResult.timeWindow}
+                      </span>
+                    )}
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {crawlerResult.channelsCrawled && crawlerResult.channelsCrawled.length > 0 && (
+                  <div className="p-2.5 rounded-lg bg-emerald-50/70 border border-emerald-100 text-xs text-emerald-900">
+                    <span className="font-bold">이벤트 내용을 가져온 활성 사이트 ({crawlerResult.channelsCrawled.length}개):</span>{' '}
+                    <span className="text-emerald-800">{crawlerResult.channelsCrawled.join(', ')}</span>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div className="p-3 rounded-xl bg-green-50 text-green-900 border border-green-200 flex flex-col justify-between">
                     <span className="font-semibold text-xs text-green-800">승인대상 목록(PENDING) 신규 등록:</span>
                     <div className="mt-1 flex items-baseline gap-2">
                       <strong className="text-2xl font-black text-green-700">+{crawlerResult.addedCount}</strong>
-                      <span className="text-xs text-green-700 font-medium">건 (관리자 승인 대기)</span>
+                      <span className="text-xs text-green-700 font-medium">건 (주소 검증 완료)</span>
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-xl bg-rose-50 text-rose-900 border border-rose-200 flex flex-col justify-between">
+                    <span className="font-semibold text-xs text-rose-800">사이트 주소 무효 / 종료 행사 제외:</span>
+                    <div className="mt-1 flex items-baseline gap-2">
+                      <strong className="text-2xl font-black text-rose-700">{crawlerResult.invalidUrlCount || 0}</strong>
+                      <span className="text-xs text-rose-700 font-medium">건 제외 (행사 미확인)</span>
                     </div>
                   </div>
                   <div className="p-3 rounded-xl bg-amber-50 text-amber-900 border border-amber-200 flex flex-col justify-between">
@@ -2840,7 +3163,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                 {crawlerResult.addedCount > 0 && (
                   <div className="p-3 rounded-xl bg-red-50 border border-red-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="text-red-900 text-xs">
-                      <strong>승인 대기 안내:</strong> 최근 1주일 동안 등록된 신규 행사 크롤링 데이터 {crawlerResult.addedCount}건이 승인 대상 목록에 등록되었습니다.
+                      <strong>승인 대기 안내:</strong> 사이트 주소 유효성 검증을 통과한 신규 행사 데이터 {crawlerResult.addedCount}건이 승인 대상 목록에 등록되었습니다.
                     </div>
                     <button
                       onClick={() => {
@@ -2855,9 +3178,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                   </div>
                 )}
 
+                {/* Invalid / Dead URLs Detailed Excluded Log */}
+                {crawlerResult.invalidUrlsDetails && crawlerResult.invalidUrlsDetails.length > 0 && (
+                  <div className="space-y-1 pt-1">
+                    <p className="font-semibold text-rose-800 text-[11px] flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5 text-rose-600" />
+                      <span>사이트 주소 무효 / 다가오는 이벤트 없음 제외 내역 ({crawlerResult.invalidUrlsDetails.length}건):</span>
+                    </p>
+                    <div className="max-h-32 overflow-y-auto space-y-1 p-2.5 rounded-lg bg-rose-50/70 border border-rose-200 font-mono text-[10px] text-rose-900">
+                      {crawlerResult.invalidUrlsDetails.map((line, idx) => (
+                        <div key={idx} className="truncate">{line}</div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {crawlerResult.duplicatesDetails && crawlerResult.duplicatesDetails.length > 0 && (
                   <div className="space-y-1 pt-1">
-                    <p className="font-semibold text-gray-700 text-[11px]">중복 필터링 상세 로그:</p>
+                    <p className="font-semibold text-gray-700 text-[11px]">중복 및 필터링 상세 로그:</p>
                     <div className="max-h-28 overflow-y-auto space-y-1 p-2.5 rounded-lg bg-gray-50 border border-gray-200 font-mono text-[10px] text-gray-600">
                       {crawlerResult.duplicatesDetails.map((line, idx) => (
                         <div key={idx} className="truncate">{line}</div>
@@ -2872,7 +3210,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
 
           {/* Past Execution History Table (Single screen table-fixed without horizontal scroll) */}
           <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-xs space-y-4">
-            <h4 className="font-extrabold text-base text-gray-900">Cron Scheduler Execution History</h4>
+            <h4 className="font-extrabold text-base text-gray-900">사이트 이벤트 가져오기 실행 이력 (Execution History)</h4>
             <div className="w-full overflow-hidden">
               <table className="w-full table-fixed text-left text-xs text-gray-700 border-collapse">
                 <thead>
@@ -3266,10 +3604,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                 </div>
                 <div>
                   <h3 className="font-extrabold text-base text-gray-900">
-                    {editingChannel ? '크롤링 대상 채널 수정 (Edit Channel)' : '새 크롤링 대상 채널 추가 (Add Channel)'}
+                    {editingChannel ? '등록 사이트 정보 수정 (Edit Registered Site)' : '새 이벤트 수집 사이트 등록 (Add Site)'}
                   </h3>
                   <p className="text-[11px] text-gray-500">
-                    Facebook 그룹, 탱고 전문 포털, 캘린더 등 크롤링 대상 사이트를 설정합니다.
+                    Facebook 그룹/페이지, 공식 웹사이트 등 이벤트 내용을 가져올 대상 사이트를 설정합니다.
                   </p>
                 </div>
               </div>
@@ -3285,12 +3623,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
             <form onSubmit={handleSaveChannel} className="space-y-3.5">
               <div className="space-y-1">
                 <label className="block font-bold text-gray-700">
-                  채널 / 사이트 이름 <span className="text-red-500">*</span>
+                  사이트 이름 <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="text"
                   required
-                  placeholder="예: Facebook (Atlanta & Birmingham Tango Communities)"
+                  placeholder="예: Tango Birmingham, Atlanta Tango Community"
                   value={channelForm.name}
                   onChange={(e) => setChannelForm({ ...channelForm, name: e.target.value })}
                   className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-red-600 focus:outline-none"
@@ -3304,7 +3642,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                 <input
                   type="url"
                   required
-                  placeholder="예: https://www.facebook.com/groups/tangobaratlanta"
+                  placeholder="예: https://www.facebook.com/groups/tangobirmingham"
                   value={channelForm.url}
                   onChange={(e) => setChannelForm({ ...channelForm, url: e.target.value })}
                   className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 font-mono focus:bg-white focus:border-red-600 focus:outline-none"
@@ -3313,7 +3651,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="block font-bold text-gray-700">플랫폼 / 채널 유형</label>
+                  <label className="block font-bold text-gray-700">플랫폼 / 사이트 유형</label>
                   <select
                     value={channelForm.sourceType}
                     onChange={(e) => setChannelForm({ ...channelForm, sourceType: e.target.value as any })}
@@ -3358,7 +3696,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                   <label className="block font-bold text-gray-700">대상 도시 (City)</label>
                   <input
                     type="text"
-                    placeholder="예: Atlanta, Seoul, Global"
+                    placeholder="예: Atlanta, Birmingham, Seoul, Global"
                     value={channelForm.city}
                     onChange={(e) => {
                       const val = e.target.value;
@@ -3384,6 +3722,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                       } else if (clean.includes('houston')) {
                         recCountry = 'US';
                         recState = 'TX';
+                      } else if (clean.includes('birmingham')) {
+                        recCountry = 'US';
+                        recState = 'AL';
                       }
 
                       setChannelForm({
@@ -3410,7 +3751,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
               </div>
 
               <div className="space-y-1">
-                <label className="block font-bold text-gray-700">채널 설명 및 수집 메모</label>
+                <label className="block font-bold text-gray-700">사이트 설명 및 수집 메모</label>
                 <textarea
                   rows={2}
                   placeholder="예: 주말 정기 밀롱가 및 페스티벌 행사 공지 정기 수집"
@@ -3428,7 +3769,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                     onChange={(e) => setChannelForm({ ...channelForm, enabled: e.target.checked })}
                     className="rounded text-red-600"
                   />
-                  <span>크롤링 채널 활성화 (Active)</span>
+                  <span>사이트 활성화 (Active)</span>
                 </label>
               </div>
 
@@ -3445,7 +3786,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                   className="px-5 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-bold shadow-xs cursor-pointer transition-colors flex items-center gap-1.5"
                 >
                   <Check className="w-3.5 h-3.5" />
-                  <span>{editingChannel ? '수정 내용 저장' : '새 채널 등록'}</span>
+                  <span>{editingChannel ? '수정 내용 저장' : '새 사이트 등록'}</span>
                 </button>
               </div>
             </form>
@@ -3512,7 +3853,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                     : 'bg-blue-600 hover:bg-blue-700'
                 }`}
               >
-                <Check className="w-3.5 h-3.5" />
+                {confirmModal.variant === 'danger' ? (
+                  <Trash2 className="w-3.5 h-3.5" />
+                ) : (
+                  <Check className="w-3.5 h-3.5" />
+                )}
                 <span>{confirmModal.confirmText || '확인 (Confirm)'}</span>
               </button>
             </div>
@@ -3597,6 +3942,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
           </div>
         </div>
       )}
+
+      {/* Facebook Community Scanner & Post Parser Modal */}
+      <FacebookSearchModal
+        isOpen={isFacebookModalOpen}
+        onClose={() => setIsFacebookModalOpen(false)}
+        currentLang={currentLang}
+      />
+
+      {/* Site Content Extractor Modal (이벤트 이름, 날짜, 시간 가져오기) */}
+      <SiteEventExtractorModal
+        isOpen={isExtractorModalOpen}
+        onClose={() => {
+          setIsExtractorModalOpen(false);
+          setExtractorTargetChannel(null);
+        }}
+        channel={extractorTargetChannel}
+        onSuccess={(addedCount) => {
+          alert(`성공: 사이트에서 ${addedCount}건의 예정된 이벤트를 [승인대상 목록(PENDING)]으로 가져왔습니다.`);
+        }}
+      />
 
     </div>
   );

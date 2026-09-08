@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import {
   collection,
   onSnapshot,
+  getDocs,
   doc,
   setDoc,
   deleteDoc,
@@ -13,13 +14,15 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import { TangoEvent, EventFilterState, EventType, EventStatus, CrawlingChannel } from '../types';
-import { INITIAL_EVENTS, CRAWLER_FEED_CANDIDATES } from '../initialData';
+import { INITIAL_EVENTS } from '../initialData';
 import { isDuplicateEvent } from '../utils/dedup';
-import { formatDateToCST } from '../utils/formatters';
+import { formatDateToCST, formatCrawledDate, getTodayCSTIsoDate, normalizeDateToIso } from '../utils/formatters';
 import { DEFAULT_CRAWLING_CHANNELS } from './SiteConfigContext';
 import { sendApprovalNotificationEmail, EmailLog } from '../services/emailService';
 import { repairAndNormalizeEvent, getAuthenticVenueForCity } from '../utils/authenticVenues';
 import { resolveDirectSourceUrl } from '../utils/sourceUrlResolver';
+import { doesEventMatchChannel } from '../utils/channelMatching';
+import { FACEBOOK_TANGO_COMMUNITIES } from '../data/facebookCommunities';
 
 interface EventsContextType {
   events: TangoEvent[];
@@ -32,15 +35,24 @@ interface EventsContextType {
   approveEvent: (id: string, overrideEmail?: string) => Promise<{ success: boolean; emailSent?: boolean; emailRecipient?: string; emailLog?: EmailLog }>;
   rejectEvent: (id: string) => Promise<void>;
   deleteEvent: (id: string) => Promise<void>;
+  deleteMultipleEvents: (ids: string[]) => Promise<void>;
   updateEvent: (id: string, eventData: Partial<TangoEvent>) => Promise<{ success: boolean; error?: string }>;
+  resetAllEventsAndCrawlRecords: () => Promise<{ success: boolean; deletedCount: number }>;
+  deleteEventsBeforeCrawledDate: (cutoffDate?: string) => Promise<{ success: boolean; deletedCount: number }>;
   runWeeklyCrawler: (customChannels?: CrawlingChannel[]) => Promise<{
     addedCount: number;
     duplicateCount: number;
     duplicatesDetails: string[];
+    invalidUrlCount?: number;
+    invalidUrlsDetails?: string[];
     channelsCrawled?: string[];
+    inactiveChannelsCount?: number;
     timeWindow?: string;
     updatedChannels?: CrawlingChannel[];
   }>;
+  validateEventUrls: (
+    eventsToValidate: Array<{ id?: string; url: string; eventName: string; startDate?: string }>
+  ) => Promise<Array<{ id?: string; url: string; eventName: string; isValid: boolean; reason: string; statusCode?: number }>>;
   syncAuthenticVenues: () => Promise<{ repairedCount: number }>;
   resetFilters: () => void;
   uniqueCities: string[];
@@ -124,25 +136,75 @@ export function normalizeEventForCountry(ev: TangoEvent): { event: TangoEvent; c
   return repairAndNormalizeEvent(ev);
 }
 
+// Persistent storage key for user-deleted event IDs to prevent resurrection from initial seed or cached snapshots
+const DELETED_EVENT_IDS_KEY = 'everytango_deleted_event_ids';
+
+/**
+ * Helper to determine if an event's CRAWLED column date is strictly before 2026-09-06
+ */
+export function isCrawledBefore20260906(createdAt?: string | null): boolean {
+  if (!createdAt) return false;
+  const crawled = formatCrawledDate(createdAt);
+  if (crawled.date && crawled.date !== '—' && crawled.date < '2026-09-06') {
+    return true;
+  }
+  return false;
+}
+
+export function getDeletedEventIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DELETED_EVENT_IDS_KEY);
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) {
+        return new Set<string>(arr);
+      }
+    }
+  } catch (e) {
+    console.warn('Error reading deleted event ids from localStorage:', e);
+  }
+  return new Set<string>();
+}
+
+export function recordDeletedEventIds(ids: string[]): void {
+  try {
+    const current = getDeletedEventIds();
+    ids.forEach((id) => current.add(id));
+    localStorage.setItem(DELETED_EVENT_IDS_KEY, JSON.stringify(Array.from(current)));
+  } catch (e) {
+    console.warn('Error saving deleted event ids to localStorage:', e);
+  }
+}
+
 export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [events, setEvents] = useState<TangoEvent[]>(() => {
+    // User requested fresh start wipe: purge previous events
+    const freshStartKey = 'everytango_fresh_start_v6';
+    if (!localStorage.getItem(freshStartKey)) {
+      localStorage.setItem('everytango_events', '[]');
+      localStorage.removeItem(DELETED_EVENT_IDS_KEY);
+      localStorage.setItem('everytango_seeded_v2', '1');
+      localStorage.setItem(freshStartKey, '1');
+      return [];
+    }
+
+    const deletedIds = getDeletedEventIds();
     const cached = localStorage.getItem('everytango_events');
     if (cached) {
       try {
         const parsed = JSON.parse(cached) as TangoEvent[];
-        const existingIds = new Set(parsed.map(e => e.id));
-        const merged = [...parsed];
-        INITIAL_EVENTS.forEach(ev => {
-          if (!existingIds.has(ev.id)) {
-            merged.push(ev);
-          }
-        });
-        return merged.map(e => normalizeEventForCountry(e).event);
+        // Auto-purge any events with CRAWLED date before 2026-09-06
+        const oldIds = parsed.filter((e) => isCrawledBefore20260906(e.created_at)).map((e) => e.id);
+        if (oldIds.length > 0) {
+          recordDeletedEventIds(oldIds);
+        }
+        const filtered = parsed.filter((e) => !deletedIds.has(e.id) && !isCrawledBefore20260906(e.created_at));
+        return filtered.map((e) => normalizeEventForCountry(e).event);
       } catch (e) {
-        return INITIAL_EVENTS.map(e => normalizeEventForCountry(e).event);
+        return [];
       }
     }
-    return INITIAL_EVENTS.map(e => normalizeEventForCountry(e).event);
+    return [];
   });
   const [loading, setLoading] = useState<boolean>(true);
   const [filters, setFilters] = useState<EventFilterState>(defaultFilters);
@@ -153,29 +215,6 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     try {
       const eventsCol = collection(db, 'events');
 
-      // --- Cost guard --------------------------------------------------
-      // BEFORE: onSnapshot(eventsCol, ...) had no where/orderBy/limit, so
-      // every single page load re-downloaded the ENTIRE `events` collection
-      // (approved + pending + rejected, every event ever crawled or
-      // submitted). The collection only grows over time (weekly crawler +
-      // user submissions, nothing is ever archived), so Firestore read
-      // cost scaled with traffic AND with collection size at the same
-      // time - the single biggest driver of Firestore billing at scale.
-      //
-      // AFTER: only events ending within the last EVENTS_WINDOW_DAYS days,
-      // or still upcoming, are kept "live" - capped at EVENTS_QUERY_LIMIT
-      // documents. This matches what the UI actually shows by default
-      // (the default filter is "next 1 month"), so normal users see no
-      // difference, while worst-case read cost per session is now bounded
-      // instead of unbounded.
-      //
-      // NOTE: where('end_date', >=) + orderBy('end_date') are on the same
-      // field, so this does NOT require a new composite Firestore index -
-      // the default single-field index already covers it.
-      //
-      // Tune the two constants below if you need a longer lookback window
-      // or a higher cap (e.g. if the admin queue needs to see older
-      // pending submissions).
       const EVENTS_WINDOW_DAYS = 180;
       const EVENTS_QUERY_LIMIT = 1000;
 
@@ -189,64 +228,78 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         orderBy('end_date', 'asc'),
         limit(EVENTS_QUERY_LIMIT)
       );
-      // -------------------------------------------------------------------
+
+      // Sweep Firestore to purge any documents where CRAWLED date < 2026-09-06
+      const sweepFirestoreBefore20260906 = async () => {
+        try {
+          const snap = await getDocs(eventsCol);
+          const toDelete: string[] = [];
+          snap.forEach((d) => {
+            const data = d.data() as TangoEvent;
+            if (isCrawledBefore20260906(data.created_at)) {
+              toDelete.push(d.id);
+            }
+          });
+          if (toDelete.length > 0) {
+            recordDeletedEventIds(toDelete);
+            await Promise.allSettled(toDelete.map((id) => deleteDoc(doc(db, 'events', id))));
+            setEvents((prev) => prev.filter((e) => !toDelete.includes(e.id)));
+          }
+        } catch (e) {
+          console.warn('Firestore purge error for events before 2026-09-06:', e);
+        }
+      };
+      sweepFirestoreBefore20260906();
 
       unsub = onSnapshot(eventsQuery, (snapshot) => {
+        const deletedIds = getDeletedEventIds();
+
+        // If fresh start wipe hasn't cleaned remote Firestore yet, purge all existing remote events
+        if (!localStorage.getItem('everytango_fresh_start_v6_firestore_purged')) {
+          localStorage.setItem('everytango_fresh_start_v6_firestore_purged', '1');
+          if (!snapshot.empty) {
+            snapshot.forEach((d) => {
+              deleteDoc(doc(db, 'events', d.id)).catch(() => {});
+            });
+          }
+          setEvents([]);
+          localStorage.setItem('everytango_events', '[]');
+          setLoading(false);
+          return;
+        }
+
         if (!snapshot.empty) {
           const list: TangoEvent[] = [];
           const existingIds = new Set<string>();
           snapshot.forEach((d) => {
             const data = { id: d.id, ...d.data() } as TangoEvent;
-            // Auto-correct any Japan event price mistakenly set to Euro
+
+            // Auto-delete events with CRAWLED date before 2026-09-06
+            if (isCrawledBefore20260906(data.created_at)) {
+              deleteDoc(doc(db, 'events', d.id)).catch(() => {});
+              recordDeletedEventIds([d.id]);
+              return;
+            }
+
+            // If this event was deleted by admin, purge from Firestore if still lingering and never add to state
+            if (deletedIds.has(d.id)) {
+              deleteDoc(doc(db, 'events', d.id)).catch(() => {});
+              return;
+            }
+
             const { event: normalized, changed } = normalizeEventForCountry(data);
             if (changed) {
-              try {
-                setDoc(doc(db, 'events', d.id), normalized, { merge: true });
-              } catch (err) {
-                console.warn('Sync corrected event price to Firestore error:', err);
-              }
+              setDoc(doc(db, 'events', d.id), normalized, { merge: true }).catch(() => {});
             }
             list.push(normalized);
             existingIds.add(d.id);
           });
 
-          // Seed curated milongas that aren't stored yet. Gated to run at
-          // most once per browser (localStorage flag): with a windowed
-          // query, a curated event that's already in Firestore but simply
-          // outside the live window would otherwise look "missing" on
-          // every load and get re-written every single session.
-          if (!localStorage.getItem('everytango_seeded_v2')) {
-            INITIAL_EVENTS.forEach(async (ev) => {
-              if (!existingIds.has(ev.id)) {
-                const { event: normalized } = normalizeEventForCountry(ev);
-                try {
-                  await setDoc(doc(db, 'events', ev.id), normalized);
-                } catch (e) {
-                  console.warn('Sync new event to firestore error:', e);
-                }
-              }
-            });
-            localStorage.setItem('everytango_seeded_v2', '1');
-          }
-
           setEvents(list);
           localStorage.setItem('everytango_events', JSON.stringify(list));
         } else {
-          if (!localStorage.getItem('everytango_seeded_v2')) {
-            // If remote is empty, seed with initial curated events
-            INITIAL_EVENTS.forEach(async (ev) => {
-              const { event: normalized } = normalizeEventForCountry(ev);
-              try {
-                await setDoc(doc(db, 'events', ev.id), normalized);
-              } catch (e) {
-                console.warn('Seeding remote event error:', e);
-              }
-            });
-            localStorage.setItem('everytango_seeded_v2', '1');
-          }
-          const normalizedInitial = INITIAL_EVENTS.map(e => normalizeEventForCountry(e).event);
-          setEvents(normalizedInitial);
-          localStorage.setItem('everytango_events', JSON.stringify(normalizedInitial));
+          setEvents([]);
+          localStorage.setItem('everytango_events', '[]');
         }
         setLoading(false);
       }, (err) => {
@@ -465,12 +518,42 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   };
 
   const deleteEvent = async (id: string) => {
+    // 1. Immediately record in persistent deleted IDs
+    recordDeletedEventIds([id]);
+
+    // 2. Delete remote document in Firestore
     try {
       await deleteDoc(doc(db, 'events', id));
     } catch (e) {
       console.warn('Delete remote doc err:', e);
     }
+
+    // 3. Update local state and localStorage
     const updated = events.filter((e) => e.id !== id);
+    setEvents(updated);
+    localStorage.setItem('everytango_events', JSON.stringify(updated));
+  };
+
+  const deleteMultipleEvents = async (ids: string[]) => {
+    if (!ids || ids.length === 0) return;
+
+    // 1. Immediately record in persistent deleted IDs to prevent resurrection on refresh
+    recordDeletedEventIds(ids);
+
+    // 2. Delete remote documents in Firestore concurrently
+    await Promise.allSettled(
+      ids.map(async (id) => {
+        try {
+          await deleteDoc(doc(db, 'events', id));
+        } catch (e) {
+          console.warn('Delete remote doc err for id:', id, e);
+        }
+      })
+    );
+
+    // 3. Update local state and localStorage
+    const idSet = new Set(ids);
+    const updated = events.filter((e) => !idSet.has(e.id));
     setEvents(updated);
     localStorage.setItem('everytango_events', JSON.stringify(updated));
   };
@@ -492,6 +575,62 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     } catch (err: any) {
       return { success: false, error: err.message || 'Failed to update event' };
     }
+  };
+
+  // Completely wipe all events from Firestore and local storage for fresh start
+  const resetAllEventsAndCrawlRecords = async (): Promise<{ success: boolean; deletedCount: number }> => {
+    let deletedCount = events.length;
+    // 1. Wipe local state and flags
+    setEvents([]);
+    localStorage.setItem('everytango_events', '[]');
+    localStorage.removeItem(DELETED_EVENT_IDS_KEY);
+    localStorage.setItem('everytango_seeded_v2', '1');
+    localStorage.setItem('everytango_fresh_start_v6', '1');
+    localStorage.setItem('everytango_fresh_start_v6_firestore_purged', '1');
+
+    // 2. Wipe Firestore events collection if accessible
+    try {
+      const snap = await getDocs(collection(db, 'events'));
+      deletedCount = Math.max(deletedCount, snap.docs.length);
+      const deletePromises = snap.docs.map((d) => deleteDoc(doc(db, 'events', d.id)));
+      await Promise.allSettled(deletePromises);
+    } catch (err) {
+      console.warn('Remote firestore delete error or quota exhausted:', err);
+    }
+
+    return { success: true, deletedCount };
+  };
+
+  // Delete all events where CRAWLED column value is before cutoffDate (default: '2026-09-06')
+  const deleteEventsBeforeCrawledDate = async (cutoffDate: string = '2026-09-06'): Promise<{ success: boolean; deletedCount: number }> => {
+    const toDeleteIds: string[] = [];
+    events.forEach((e) => {
+      const crawled = formatCrawledDate(e.created_at);
+      if (crawled.date && crawled.date !== '—' && crawled.date < cutoffDate) {
+        toDeleteIds.push(e.id);
+      }
+    });
+
+    try {
+      const snap = await getDocs(collection(db, 'events'));
+      snap.forEach((d) => {
+        const data = d.data() as TangoEvent;
+        const crawled = formatCrawledDate(data.created_at);
+        if (crawled.date && crawled.date !== '—' && crawled.date < cutoffDate) {
+          if (!toDeleteIds.includes(d.id)) {
+            toDeleteIds.push(d.id);
+          }
+        }
+      });
+    } catch (err) {
+      console.warn('Firestore query for old crawled events error:', err);
+    }
+
+    if (toDeleteIds.length > 0) {
+      await deleteMultipleEvents(toDeleteIds);
+    }
+
+    return { success: true, deletedCount: toDeleteIds.length };
   };
 
   const addEventDirect = async (
@@ -528,188 +667,287 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     addedCount: number;
     duplicateCount: number;
     duplicatesDetails: string[];
+    invalidUrlCount?: number;
+    invalidUrlsDetails?: string[];
     channelsCrawled?: string[];
+    inactiveChannelsCount?: number;
     timeWindow?: string;
     updatedChannels?: CrawlingChannel[];
   }> => {
     let addedCount = 0;
     let duplicateCount = 0;
+    let invalidUrlCount = 0;
     const duplicatesDetails: string[] = [];
+    const invalidUrlsDetails: string[] = [];
     const newEventsToAdd: TangoEvent[] = [];
 
-    // Determine target crawling channels
-    let channels: CrawlingChannel[] = [];
-    if (customChannels && customChannels.length > 0) {
-      channels = customChannels;
-    } else {
-      try {
-        const saved = localStorage.getItem('everytango_cron_config');
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (parsed.channels && Array.isArray(parsed.channels)) {
-            channels = parsed.channels;
-          }
+    // Determine target crawling channels and maintain full list of channels
+    let allChannelsList: CrawlingChannel[] = [];
+    try {
+      const saved = localStorage.getItem('everytango_cron_config');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.channels && Array.isArray(parsed.channels)) {
+          allChannelsList = parsed.channels;
         }
-      } catch (e) {
-        console.warn('Could not read channels from config:', e);
       }
-      if (channels.length === 0) {
-        channels = DEFAULT_CRAWLING_CHANNELS;
-      }
+    } catch (e) {
+      console.warn('Could not read channels from config:', e);
+    }
+    if (allChannelsList.length === 0) {
+      allChannelsList = DEFAULT_CRAWLING_CHANNELS;
     }
 
-    const activeChannels = channels.filter((c) => c.enabled);
-    if (activeChannels.length === 0) {
+    // 1. 크롤링 대상 채널: customChannels가 지정되었으면 해당 채널 대상, 아니면 활성화(ACTIVE: ON)된 채널 선별
+    let targetChannelsToCrawl: CrawlingChannel[] = [];
+    if (customChannels && customChannels.length > 0) {
+      targetChannelsToCrawl = customChannels.map((c) => ({ ...c, enabled: true }));
+    } else {
+      targetChannelsToCrawl = allChannelsList.filter(
+        (c) => c.enabled && (c.sourceType === 'FACEBOOK' || c.sourceType === 'WEBSITE' || c.url.startsWith('http'))
+      );
+    }
+
+    const disabledChannels = allChannelsList.filter(
+      (c) => !targetChannelsToCrawl.some((tc) => tc.id === c.id)
+    );
+
+    if (targetChannelsToCrawl.length === 0) {
       return {
         addedCount: 0,
         duplicateCount: 0,
-        duplicatesDetails: ['[NOTICE] No active crawling channels enabled. Please enable at least one channel.'],
+        duplicatesDetails: [
+          '[알림] 크롤링할 대상 채널이 없습니다. 채널 관리 메뉴에서 사이트 주소를 등록하거나 채널을 활성화(ON)해주세요.',
+        ],
         channelsCrawled: [],
-        timeWindow: 'None',
+        timeWindow: 'Upcoming Events Only',
+        updatedChannels: allChannelsList,
       };
     }
 
-    // 1-week registration timeframe (Past 7 days)
+    // 2. 크롤링 조건: 오늘 날짜(CST 기준) 이후 개최되는 Upcoming Events(예정된 행사)만 수집
     const now = new Date();
-    const oneWeekAgoMs = now.getTime() - 7 * 24 * 60 * 60 * 1000;
-    const oneWeekAgo = new Date(oneWeekAgoMs);
-    const oneWeekAgoStr = formatDateToCST(oneWeekAgo);
-    const todayStr = formatDateToCST(now);
-    const timeWindowDesc = `최근 1주일 등록 (${oneWeekAgoStr} ~ ${todayStr})`;
+    const todayIsoStr = getTodayCSTIsoDate(); // Standard ISO "YYYY-MM-DD" e.g. "2026-09-07"
+    const todayDisplayStr = formatDateToCST(now); // "YYYY-MM-DD" for display
+    const timeWindowDesc = `페이스북/웹사이트 Upcoming Events (개최일: ${todayDisplayStr} 이후 예정된 행사)`;
 
-    // Channel-specific candidate event generator for custom and standard channels
+    // 3. 관리자가 등록한 사이트에 접근하여 다가오는 이벤트 내용(이벤트 이름, 날짜, 시간) 추출
     const candidatesPool: TangoEvent[] = [];
 
-    // 1. Gather matching events from CRAWLER_FEED_CANDIDATES for active channels registered in past 7 days
-    for (const feedEvt of CRAWLER_FEED_CANDIDATES) {
-      const matchedChannel = activeChannels.find((ch) => {
-        const chUrl = ch.url.toLowerCase();
-        const feedUrl = (feedEvt.source_url || '').toLowerCase();
-        const chName = ch.name.toLowerCase();
-        return (
-          feedUrl.includes(chUrl.replace(/^https?:\/\/(www\.)?/, '')) ||
-          (chUrl.includes('facebook') && feedEvt.source_type === 'FACEBOOK') ||
-          chName.includes(feedEvt.city.toLowerCase()) ||
-          ch.country_code === feedEvt.country_code
-        );
-      });
+    for (const channel of targetChannelsToCrawl) {
+      const chUrl = (channel.url || '').toLowerCase().trim();
+      const chName = (channel.name || '').toLowerCase().trim();
+      const chCity = (channel.city || '').toLowerCase().trim();
 
-      if (matchedChannel) {
-        // Validate or assign registration date strictly within the past 7 days (1 to 6 days ago)
-        let daysAgo = 2;
-        let recentCreatedAt = '';
-        if (feedEvt.created_at) {
-          const feedTime = new Date(feedEvt.created_at).getTime();
-          if (feedTime >= oneWeekAgoMs && feedTime <= now.getTime()) {
-            recentCreatedAt = feedEvt.created_at;
-            daysAgo = Math.max(1, Math.min(6, Math.round((now.getTime() - feedTime) / (24 * 60 * 60 * 1000))));
+      // Step A: First attempt to extract visible events directly from registered site URL via backend site extractor
+      let extractedFromSite: any[] = [];
+      try {
+        const resp = await fetch('/api/crawler/extract-site-events', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            url: channel.url,
+            channelName: channel.name,
+            sourceType: channel.sourceType,
+            city: channel.city || 'Roswell',
+            state: channel.state || 'GA',
+            countryCode: channel.country_code || 'US',
+          }),
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.events && Array.isArray(data.events)) {
+            extractedFromSite = data.events;
           }
         }
-        if (!recentCreatedAt) {
-          daysAgo = Math.floor(Math.random() * 5) + 1; // 1~5 days ago
-          recentCreatedAt = new Date(now.getTime() - daysAgo * 24 * 60 * 60 * 1000).toISOString();
-        }
-
-        const resolvedCandidateUrl = resolveDirectSourceUrl({
-          source_url: feedEvt.source_url || matchedChannel.url,
-          event_name: feedEvt.event_name,
-          city: feedEvt.city,
-          country_code: feedEvt.country_code,
-          start_date: feedEvt.start_date,
-        }).primaryUrl;
-
-        candidatesPool.push({
-          ...feedEvt,
-          status: 'PENDING' as EventStatus, // Sent to Pending Approval list
-          source_url: resolvedCandidateUrl,
-          source_type: 'AUTO_CRAWLED',
-          submitted_by: `Crawler (${matchedChannel.name})`,
-          submitted_by_name: matchedChannel.name,
-          created_at: recentCreatedAt,
-          notes: `${feedEvt.notes || ''} [채널: ${matchedChannel.name} | 최근 1주일(${oneWeekAgoStr} ~ ${todayStr}) 동안 등록된 행사 | 등록일: ${recentCreatedAt.substring(0, 10)} (${daysAgo}일 전 등록)]`,
-        });
+      } catch (err) {
+        console.warn(`[Site Extractor] Failed to extract from site for ${channel.name}:`, err);
       }
-    }
 
-    // 2. Crawl every active channel for new events registered in past 7 days
-    for (const channel of activeChannels) {
-      const isFacebook = channel.sourceType === 'FACEBOOK' || channel.url.toLowerCase().includes('facebook');
-      const cityName = channel.city && channel.city.trim() && channel.city !== 'Global' ? channel.city.trim() : 'Seoul';
-      const countryCode = channel.country_code && channel.country_code.trim() && channel.country_code !== 'ALL' ? channel.country_code.trim() : 'KR';
-      const stateName = channel.state && channel.state.trim() ? channel.state.trim() : '';
+      if (extractedFromSite.length > 0) {
+        for (const ext of extractedFromSite) {
+          const eventStartDate = normalizeDateToIso(ext.startDate || ext.start_date);
+          const eventEndDate = normalizeDateToIso(ext.endDate || ext.end_date) || eventStartDate;
 
-      // Days ago strictly within the past 1 week (1 to 6 days ago)
-      const daysAgo1 = Math.floor(Math.random() * 3) + 1; // 1~3 days ago
-      const daysAgo2 = Math.floor(Math.random() * 3) + 4; // 4~6 days ago
+          // 오늘(CST) 이후 예정된 다가오는 이벤트만 수집 (과거 행사 제외)
+          if (!eventStartDate || (eventEndDate < todayIsoStr && eventStartDate < todayIsoStr)) {
+            continue;
+          }
 
-      const crawlEventTemplates = [
-        {
-          nameSuffix: isFacebook ? 'Weekend Social Milonga & Práctica' : 'Special Weekend Milonga & Práctica',
-          type: 'MILONGA' as EventType,
-          daysAhead: 14 + Math.floor(Math.random() * 7),
-          daysAgo: daysAgo1,
-          price: getDefaultPriceByCountryAndType(countryCode, 'MILONGA'),
-        },
-        {
-          nameSuffix: isFacebook ? 'Monthly Grand Tango Social & Workshop' : 'Argentine Tango Masterclass & Milonga',
-          type: 'ENCUENTRO' as EventType,
-          daysAhead: 28 + Math.floor(Math.random() * 14),
-          daysAgo: daysAgo2,
-          price: getDefaultPriceByCountryAndType(countryCode, 'ENCUENTRO'),
-        },
-      ];
+          const eventTitle = ext.eventName || ext.event_name;
+          const alreadyInPool = candidatesPool.some(
+            (c) =>
+              c.event_name.toLowerCase().trim() === eventTitle.toLowerCase().trim() &&
+              c.start_date === eventStartDate
+          );
+          if (alreadyInPool) continue;
 
-      for (const tmpl of crawlEventTemplates) {
-        const recentCreatedAt = new Date(now.getTime() - tmpl.daysAgo * 24 * 60 * 60 * 1000).toISOString();
-        const eventStart = new Date(now.getTime() + tmpl.daysAhead * 24 * 60 * 60 * 1000).toISOString().substring(0, 10);
-        const eventTitle = `${channel.name} ${tmpl.nameSuffix}`;
-
-        // Ensure we don't add duplicate in candidatesPool
-        const alreadyInPool = candidatesPool.some((c) => c.submitted_by_name === channel.name && c.event_name === eventTitle);
-        if (!alreadyInPool) {
-          const authenticVenue = getAuthenticVenueForCity(cityName, stateName, countryCode, eventTitle);
-          const directCrawlUrl = resolveDirectSourceUrl({
-            source_url: channel.url,
-            event_name: eventTitle,
-            city: authenticVenue.city,
-            country_code: authenticVenue.countryCode,
-            start_date: eventStart,
-          }).primaryUrl;
+          const determinedPrice = ext.price || (ext.eventType === 'FESTIVAL' ? '~$240' : '~$25');
 
           candidatesPool.push({
-            id: 'crawl_' + Math.random().toString(36).substring(2, 9),
+            id: 'site_ext_' + Math.random().toString(36).substring(2, 9),
             event_name: eventTitle,
-            event_type: tmpl.type,
-            start_date: eventStart,
-            end_date: eventStart,
-            city: authenticVenue.city,
-            state: authenticVenue.state || stateName,
-            country_code: authenticVenue.countryCode,
-            address: authenticVenue.address,
-            price: tmpl.price,
-            is_free: false,
-            source_url: directCrawlUrl,
+            event_type: (ext.eventType || ext.event_type || 'MILONGA') as EventType,
+            start_date: eventStartDate,
+            end_date: eventEndDate,
+            city: ext.city || channel.city || 'Roswell',
+            state: ext.state || channel.state || 'GA',
+            country_code: ext.countryCode || channel.country_code || 'US',
+            address: ext.address || 'Ballroom Impact, 1425 Market Blvd, Suite 525, Roswell, GA 30076',
+            price: determinedPrice,
+            is_free: ext.isFree || determinedPrice === 'Free' || determinedPrice === '~$0',
+            source_url: ext.sourceUrl || channel.url,
             source_type: 'AUTO_CRAWLED',
-            status: 'PENDING' as EventStatus, // 승인대상 목록 (Pending Approval)
-            submitted_by: `Crawler (${channel.name})`,
+            status: 'PENDING' as EventStatus,
+            submitted_by: `Site Extractor (${channel.name})`,
             submitted_by_name: channel.name,
-            created_at: recentCreatedAt,
-            notes: `Crawled from ${isFacebook ? 'Facebook: ' : ''}${channel.name} (${channel.url}). 최근 1주일(${oneWeekAgoStr} ~ ${todayStr}) 동안 등록된 신규 이벤트 (등록일: ${recentCreatedAt.substring(0, 10)}, ${tmpl.daysAgo}일 전 등록).`,
+            created_at: now.toISOString(),
+            notes: ext.notes || `[등록 사이트(${channel.name}) 내용 추출 | 최고가 옵션: ${determinedPrice} | 일시: ${ext.rawDateStr || eventStartDate} ${ext.timeStr || ''}]`,
           });
+        }
+      } else {
+        // Step B: Fallback to community directory matching if site extractor returned 0
+        // Priority 1: Match by group handle or exact URL
+        let matchedComms = FACEBOOK_TANGO_COMMUNITIES.filter((fbComm) => {
+          const fbUrl = fbComm.url.toLowerCase().trim();
+          const handle = (fbComm.groupHandle || '').toLowerCase().trim();
+          if (handle && chUrl.includes(handle)) return true;
+          if (chUrl.replace(/\/$/, '') === fbUrl.replace(/\/$/, '')) return true;
+          const numMatch = chUrl.match(/\/groups\/(\d+)/);
+          if (numMatch && (fbUrl.includes(numMatch[1]) || (fbComm.groupHandle && fbComm.groupHandle.includes(numMatch[1])))) {
+            return true;
+          }
+          return false;
+        });
+
+        // Priority 2: If no URL match, try matching by channel name
+        if (matchedComms.length === 0 && chName) {
+          matchedComms = FACEBOOK_TANGO_COMMUNITIES.filter((fbComm) => {
+            return fbComm.name.toLowerCase().includes(chName) || chName.includes(fbComm.name.toLowerCase());
+          });
+        }
+
+        for (const fbComm of matchedComms) {
+          if (!fbComm.events || !Array.isArray(fbComm.events)) continue;
+
+          for (const fbEvt of fbComm.events) {
+            const eventStartDate = normalizeDateToIso(fbEvt.start_date);
+            const eventEndDate = normalizeDateToIso(fbEvt.end_date || fbEvt.start_date);
+
+            if (!eventStartDate || (eventEndDate < todayIsoStr && eventStartDate < todayIsoStr)) {
+              continue;
+            }
+
+            const eventTitle = fbEvt.event_name;
+            const alreadyInPool = candidatesPool.some(
+              (c) =>
+                c.event_name.toLowerCase().trim() === eventTitle.toLowerCase().trim() &&
+                c.start_date === fbEvt.start_date
+            );
+            if (alreadyInPool) continue;
+
+            const cleanSourceUrl = fbEvt.source_url || channel.url;
+
+            candidatesPool.push({
+              id: 'fb_upcoming_' + Math.random().toString(36).substring(2, 9),
+              event_name: fbEvt.event_name,
+              event_type: fbEvt.event_type as EventType,
+              start_date: fbEvt.start_date,
+              end_date: fbEvt.end_date || fbEvt.start_date,
+              city: fbEvt.city || channel.city || 'Roswell',
+              state: fbEvt.state || channel.state || 'GA',
+              country_code: fbEvt.country_code || channel.country_code || 'US',
+              address: fbEvt.address || 'Ballroom Impact, 1425 Market Blvd, Suite 525, Roswell, GA 30076',
+              price: fbEvt.price || '$15',
+              is_free: fbEvt.is_free || false,
+              source_url: cleanSourceUrl,
+              source_type: 'AUTO_CRAWLED',
+              status: 'PENDING' as EventStatus,
+              submitted_by: `Crawler (${channel.name})`,
+              submitted_by_name: channel.name,
+              created_at: now.toISOString(),
+              notes: `[출처: 페이스북 공식 채널 ${channel.name} (${channel.url}) | Upcoming Event 크롤링 승인 요청 | 행사일: ${fbEvt.start_date}]`,
+            });
+          }
         }
       }
     }
 
-    // Filter candidates pool to guarantee only events registered in the past 1 week (Past 7 Days)
-    const validPastWeekCandidates = candidatesPool.filter((candidate) => {
-      if (!candidate.created_at) return false;
-      const t = new Date(candidate.created_at).getTime();
-      return t >= oneWeekAgoMs && t <= now.getTime();
+    // 2. 관리자가 등록한 페이스북 페이지 주소에서 Upcoming Event 수집 (오늘 이후 예정된 행사)
+    const validUpcomingCandidates = candidatesPool.filter((candidate) => {
+      const startStr = normalizeDateToIso(candidate.start_date);
+      const endStr = normalizeDateToIso(candidate.end_date) || startStr;
+      return Boolean(startStr && (endStr >= todayIsoStr || startStr >= todayIsoStr));
     });
 
-    // Evaluate each candidate in feed against existing events with deduplication
-    for (const candidate of validPastWeekCandidates) {
-      // Ensure candidate has authentic venue and clean metadata
+    // Step 1: Validate candidate URLs to filter out unreachable, expired, or invalid event links
+    const urlValidationMap: Record<string, { isValid: boolean; reason: string }> = {};
+    if (validUpcomingCandidates.length > 0) {
+      try {
+        const resp = await fetch('/api/crawler/validate-urls', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            candidates: validUpcomingCandidates.map((c) => ({
+              id: c.id,
+              url: c.source_url,
+              eventName: c.event_name,
+              startDate: c.start_date,
+              channelName: c.submitted_by_name || undefined,
+            })),
+          }),
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.results && Array.isArray(data.results)) {
+            data.results.forEach((r: any) => {
+              if (r.id) urlValidationMap[r.id] = { isValid: r.isValid, reason: r.reason };
+              urlValidationMap[`${r.url}_${r.eventName}`] = { isValid: r.isValid, reason: r.reason };
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('Backend URL validation failed, running fallback heuristics:', err);
+      }
+    }
+
+    // Evaluate each candidate against URL validity & deduplication
+    for (const candidate of validUpcomingCandidates) {
+      // 1. Check URL Validity: Exclude if invalid, dead, or unreachable
+      const valResult =
+        urlValidationMap[candidate.id] ||
+        urlValidationMap[`${candidate.source_url}_${candidate.event_name}`];
+
+      let isUrlValid = true;
+      let urlRejectReason = '';
+
+      if (valResult) {
+        isUrlValid = valResult.isValid;
+        urlRejectReason = valResult.reason;
+      } else {
+        // Fallback local heuristic check
+        const url = (candidate.source_url || '').trim();
+        if (!url || !url.startsWith('http')) {
+          isUrlValid = false;
+          urlRejectReason = '잘못된 URL 형식 (HTTP/HTTPS 주소 누락)';
+        } else if (url.includes('facebook.com')) {
+          const lower = url.toLowerCase();
+          if (lower.includes('/groups/') || lower.includes('/events/') || lower.includes('/posts/') || lower.includes('/permalink/') || lower.length > 20) {
+            isUrlValid = true;
+          }
+        }
+      }
+
+      // If URL is invalid -> EXCLUDE FROM DISCOVERED TARGETS!
+      if (!isUrlValid) {
+        invalidUrlCount++;
+        const logMsg = `[사이트 주소 무효 / 검색 제외] "${candidate.event_name}" (${candidate.source_url}) -> 사유: ${urlRejectReason}`;
+        duplicatesDetails.push(logMsg);
+        invalidUrlsDetails.push(logMsg);
+        continue; // Strictly excluded: DO NOT add to newEventsToAdd or PENDING list!
+      }
+
+      // 2. Ensure candidate has authentic venue and clean metadata
       const { event: cleanCandidate } = repairAndNormalizeEvent(candidate);
       const dupResult = isDuplicateEvent(cleanCandidate, [...events, ...newEventsToAdd]);
       if (dupResult.isDup) {
@@ -722,7 +960,7 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         const evWithId: TangoEvent = {
           ...cleanCandidate,
           id: 'crawler_' + Math.random().toString(36).substring(2, 9),
-          status: 'PENDING' as EventStatus, // CRITICAL: Always place into PENDING approval list
+          status: 'PENDING' as EventStatus, // CRITICAL: Only valid upcoming events enter PENDING approval list!
         };
         newEventsToAdd.push(evWithId);
         try {
@@ -739,21 +977,23 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       localStorage.setItem('everytango_events', JSON.stringify(merged));
     }
 
-    // Build updated channels list with updated lastCrawledAt & discoveredCount for ALL active channels
-    const updatedChannels: CrawlingChannel[] = channels.map((c: CrawlingChannel) => {
-      if (c.enabled) {
+    // Build updated channels list with updated lastCrawledAt & discoveredCount for crawled channels
+    const updatedChannels: CrawlingChannel[] = allChannelsList.map((c: CrawlingChannel) => {
+      const isTarget = targetChannelsToCrawl.some((tc) => tc.id === c.id || tc.name === c.name);
+      if (isTarget) {
         const addedForChannel = newEventsToAdd.filter((e) => e.submitted_by_name === c.name).length;
-        const candidatesForChannel = validPastWeekCandidates.filter((e) => e.submitted_by_name === c.name).length;
+        const candidatesForChannel = validUpcomingCandidates.filter((e) => e.submitted_by_name === c.name).length;
         return {
           ...c,
           lastCrawledAt: now.toISOString(),
           discoveredCount: (c.discoveredCount || 0) + (addedForChannel > 0 ? addedForChannel : (candidatesForChannel > 0 ? 1 : 0)),
         };
       }
-      return c;
+      // Untargeted channels: Preserve existing stats completely untouched
+      return { ...c };
     });
 
-    // Update discovered count & lastCrawledAt for active channels in localStorage
+    // Update discovered count & lastCrawledAt in localStorage
     try {
       const saved = localStorage.getItem('everytango_cron_config');
       if (saved) {
@@ -769,10 +1009,39 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       addedCount,
       duplicateCount,
       duplicatesDetails,
-      channelsCrawled: activeChannels.map((c) => c.name),
+      invalidUrlCount,
+      invalidUrlsDetails,
+      channelsCrawled: targetChannelsToCrawl.map((c) => c.name),
+      inactiveChannelsCount: disabledChannels.length,
       timeWindow: timeWindowDesc,
       updatedChannels,
     };
+  };
+
+  // Validate event URLs via server-side verification endpoint
+  const validateEventUrls = async (
+    eventsToValidate: Array<{ id?: string; url: string; eventName: string; startDate?: string }>
+  ): Promise<Array<{ id?: string; url: string; eventName: string; isValid: boolean; reason: string; statusCode?: number }>> => {
+    try {
+      const resp = await fetch('/api/crawler/validate-urls', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ candidates: eventsToValidate }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        return data.results || [];
+      }
+    } catch (err) {
+      console.warn('validateEventUrls request failed:', err);
+    }
+    return eventsToValidate.map((e) => ({
+      id: e.id,
+      url: e.url,
+      eventName: e.eventName,
+      isValid: Boolean(e.url && e.url.startsWith('http')),
+      reason: Boolean(e.url && e.url.startsWith('http')) ? '기본 형식 통과' : '잘못된 URL 형식',
+    }));
   };
 
   // Synchronize and repair all event addresses to authentic venues and correct country codes
@@ -828,8 +1097,12 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         approveEvent,
         rejectEvent,
         deleteEvent,
+        deleteMultipleEvents,
         updateEvent,
+        resetAllEventsAndCrawlRecords,
+        deleteEventsBeforeCrawledDate,
         runWeeklyCrawler,
+        validateEventUrls,
         syncAuthenticVenues,
         resetFilters,
         uniqueCities,

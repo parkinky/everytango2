@@ -4,76 +4,69 @@ import { auth } from '../firebase';
 
 export const DEFAULT_CRAWLING_CHANNELS: CrawlingChannel[] = [
   {
+    id: 'chan_fb_birmingham_tango',
+    name: 'Tango Birmingham',
+    url: 'https://www.facebook.com/groups/115408145174568',
+    sourceType: 'FACEBOOK',
+    city: 'Birmingham',
+    state: 'AL',
+    country_code: 'US',
+    description: 'Birmingham, Alabama Argentine Tango social dancers community group.',
+    enabled: true,
+    lastCrawledAt: '2026-09-07T16:00:00.000Z',
+    discoveredCount: 2,
+  },
+  {
+    id: 'chan_fb_neworleanstango',
+    name: 'New Orleans Argentine Tango Group',
+    url: 'https://www.facebook.com/groups/NewOrleansTango/events',
+    sourceType: 'FACEBOOK',
+    city: 'New Orleans',
+    state: 'LA',
+    country_code: 'US',
+    description: 'New Orleans Argentine Tango community group and upcoming milongas.',
+    enabled: true,
+    lastCrawledAt: '2026-09-07T16:00:00.000Z',
+    discoveredCount: 0,
+  },
+  {
+    id: 'chan_fb_boston_tango',
+    name: 'Boston Tango',
+    url: 'https://www.facebook.com/groups/BosTango/events',
+    sourceType: 'FACEBOOK',
+    city: 'Boston',
+    state: 'MA',
+    country_code: 'US',
+    description: 'Boston Tango community group, weekly milongas, practicas, and workshops in Greater Boston and Massachusetts.',
+    enabled: true,
+    lastCrawledAt: '2026-09-07T16:00:00.000Z',
+    discoveredCount: 6,
+  },
+  {
+    id: 'chan_fb_new_york_tango_243341781981565',
+    name: 'Tango New York',
+    url: 'https://www.facebook.com/groups/243341781981565/events',
+    sourceType: 'FACEBOOK',
+    city: 'New York',
+    state: 'NY',
+    country_code: 'US',
+    description: 'New York City tango events and community updates.',
+    enabled: true,
+    lastCrawledAt: '2026-09-07T16:00:00.000Z',
+    discoveredCount: 3,
+  },
+  {
     id: 'chan_fb_atl_bhm',
-    name: 'Facebook (Atlanta & Birmingham Tango Communities)',
+    name: 'Atlanta Tango Bar',
     url: 'https://www.facebook.com/groups/tangobaratlanta',
     sourceType: 'FACEBOOK',
-    city: 'Atlanta / Birmingham',
+    city: 'Rosewell',
+    state: 'GA',
     country_code: 'US',
-    description: 'Weekly milongas, practica updates, and festive weekend announcements from Greater Atlanta & Alabama.',
+    description: 'Atlanta Tango Bar regular milongas and community events.',
     enabled: true,
-    lastCrawledAt: '2026-09-04T06:00:00Z',
-    discoveredCount: 8,
-  },
-  {
-    id: 'chan_tangopolix',
-    name: 'Tangopolix Global Tango Portal',
-    url: 'https://www.tangopolix.com',
-    sourceType: 'PORTAL',
-    city: 'Global',
-    country_code: 'ALL',
-    description: 'International directory of tango festivals, encuentros, marathons and workshops worldwide.',
-    enabled: true,
-    lastCrawledAt: '2026-09-04T06:00:00Z',
-    discoveredCount: 14,
-  },
-  {
-    id: 'chan_hoy_milonga',
-    name: 'Hoy Milonga & Info Buenos Aires Feed',
-    url: 'https://www.hoy-milonga.com',
-    sourceType: 'WEBSITE',
-    city: 'Buenos Aires & Worldwide',
-    country_code: 'AR',
-    description: 'Daily traditional and modern milongas in Buenos Aires and key partner metropolitan regions.',
-    enabled: true,
-    lastCrawledAt: '2026-09-04T06:00:00Z',
-    discoveredCount: 6,
-  },
-  {
-    id: 'chan_marathon_reg',
-    name: 'Global Tango Marathon & Encuentro Registry',
-    url: 'https://tangomarathons.com',
-    sourceType: 'CALENDAR',
-    city: 'Global',
-    country_code: 'ALL',
-    description: 'Role-balanced international tango marathons with registration open dates.',
-    enabled: true,
-    lastCrawledAt: '2026-09-04T06:00:00Z',
-    discoveredCount: 5,
-  },
-  {
-    id: 'chan_korea_daum_cafe',
-    name: 'Korea Tango Community & Milonga Club Directory',
-    url: 'https://cafe.daum.net/elbulin',
-    sourceType: 'COMMUNITY',
-    city: 'Seoul',
-    country_code: 'KR',
-    description: 'Seoul Hongdae & Gangnam milonga schedules, weekend specials, and party announcements.',
-    enabled: true,
-    lastCrawledAt: '2026-09-04T06:00:00Z',
-    discoveredCount: 7,
-  },
-  {
-    id: 'chan_japan_tokyo_tango',
-    name: 'Tokyo Argentine Tango Community & Milonga Guide',
-    url: 'https://www.facebook.com/groups/tangotokyo',
-    sourceType: 'COMMUNITY',
-    city: 'Tokyo',
-    country_code: 'JP',
-    description: 'Tokyo Ginza, Shibuya & Roppongi milongas, practica schedules, and weekend socials.',
-    enabled: true,
-    lastCrawledAt: '2026-09-04T06:00:00Z',
-    discoveredCount: 6,
+    lastCrawledAt: '2026-09-07T16:00:00.000Z',
+    discoveredCount: 11,
   },
 ];
 
@@ -87,7 +80,9 @@ interface SiteConfigContextType {
   addCrawlingChannel: (channelData: Omit<CrawlingChannel, 'id' | 'lastCrawledAt' | 'discoveredCount' | 'addedAt'>) => CrawlingChannel;
   updateCrawlingChannel: (id: string, updates: Partial<CrawlingChannel>) => void;
   deleteCrawlingChannel: (id: string) => void;
+  deleteUnexecutedChannels: () => void;
   toggleCrawlingChannel: (id: string) => void;
+  resetAllCrawlRecords: () => void;
   autoUpdateCuratedNotice: (noticeText: string) => void;
   callGeminiWebsiteManager: (
     prompt: string,
@@ -122,30 +117,9 @@ const DEFAULT_CRON_CONFIG: CronScheduleConfig = {
   similarityThreshold: 0.7,
   autoApprove: true,
   channels: DEFAULT_CRAWLING_CHANNELS,
-  lastRunAt: '2026-09-04T06:00:00Z', // Past Friday 01:00 AM CDT (UTC-5)
-  nextRunAt: '2026-09-11T06:00:00Z', // Upcoming Friday 01:00 AM CDT
-  runHistory: [
-    {
-      id: 'cron_log_cst_1',
-      timestamp: '2026-09-04T06:00:00Z',
-      status: 'SUCCESS',
-      itemsDiscovered: 15,
-      itemsAdded: 5,
-      duplicatesBlocked: 10,
-      durationMs: 1480,
-      message: 'US Central Weekly Friday 01:00 AM crawler executed. Crawled Facebook Atlanta/Birmingham & global feeds. 5 verified events registered, 10 duplicate candidates blocked.',
-    },
-    {
-      id: 'cron_log_cst_2',
-      timestamp: '2026-08-28T06:00:00Z',
-      status: 'SUCCESS',
-      itemsDiscovered: 11,
-      itemsAdded: 4,
-      duplicatesBlocked: 7,
-      durationMs: 1320,
-      message: 'US Central Weekly Friday 01:00 AM sync completed. 4 new events registered, 7 duplicates blocked.',
-    },
-  ],
+  lastRunAt: undefined,
+  nextRunAt: undefined,
+  runHistory: [],
 };
 
 const SiteConfigContext = createContext<SiteConfigContextType | undefined>(undefined);
@@ -171,6 +145,10 @@ export const SiteConfigProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   const [cronConfig, setCronConfig] = useState<CronScheduleConfig>(() => {
     try {
+      // Purge any channels that have no lastCrawledAt ("미실행")
+      const purgeKey = 'everytango_purge_unexecuted_clean_v1';
+      const hasPurged = localStorage.getItem(purgeKey);
+
       const saved = localStorage.getItem('everytango_cron_config');
       if (saved) {
         const parsed = JSON.parse(saved);
@@ -195,6 +173,8 @@ export const SiteConfigProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               sState = sState || 'OR';
             } else if (city.includes('houston') && cCode === 'US') {
               sState = sState || 'TX';
+            } else if (city.includes('boston') && cCode === 'US') {
+              sState = sState || 'MA';
             }
             return {
               ...ch,
@@ -202,6 +182,27 @@ export const SiteConfigProvider: React.FC<{ children: React.ReactNode }> = ({ ch
               state: sState,
             };
           });
+
+          // Ensure Boston Tango is present in the channels list
+          const hasBoston = parsed.channels.some(
+            (ch: CrawlingChannel) => ch.id === 'chan_fb_boston_tango' || (ch.url && ch.url.toLowerCase().includes('bostango'))
+          );
+          if (!hasBoston) {
+            const bostonChan = DEFAULT_CRAWLING_CHANNELS.find((c) => c.id === 'chan_fb_boston_tango');
+            if (bostonChan) {
+              parsed.channels.push(bostonChan);
+            }
+          }
+
+          // Purge all channels that have no lastCrawledAt ("미실행")
+          if (!hasPurged) {
+            parsed.channels = parsed.channels.filter((ch: CrawlingChannel) => Boolean(ch.lastCrawledAt));
+            if (parsed.channels.length === 0) {
+              parsed.channels = DEFAULT_CRAWLING_CHANNELS;
+            }
+            localStorage.setItem(purgeKey, '1');
+            localStorage.setItem('everytango_cron_config', JSON.stringify(parsed));
+          }
         }
         return { ...DEFAULT_CRON_CONFIG, ...parsed };
       }
@@ -351,6 +352,20 @@ export const SiteConfigProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     });
   };
 
+  // Delete all unexecuted channels (where lastCrawledAt is missing / "미실행")
+  const deleteUnexecutedChannels = () => {
+    setCronConfig((prev) => {
+      const existing = prev.channels || DEFAULT_CRAWLING_CHANNELS;
+      const remainingChannels = existing.filter((c) => Boolean(c.lastCrawledAt));
+      const updated: CronScheduleConfig = {
+        ...prev,
+        channels: remainingChannels,
+      };
+      localStorage.setItem('everytango_cron_config', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
   // Toggle active status for crawling channel
   const toggleCrawlingChannel = (id: string) => {
     setCronConfig((prev) => {
@@ -359,6 +374,27 @@ export const SiteConfigProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       const updated: CronScheduleConfig = {
         ...prev,
         channels: updatedChannels,
+      };
+      localStorage.setItem('everytango_cron_config', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  // Reset all channels' lastCrawledAt, discoveredCount and cron run history
+  const resetAllCrawlRecords = () => {
+    setCronConfig((prev) => {
+      const resetChannels = (prev.channels || DEFAULT_CRAWLING_CHANNELS).map((ch) => ({
+        ...ch,
+        lastCrawledAt: undefined,
+        lastCrawledStatus: undefined,
+        discoveredCount: 0,
+      }));
+      const updated: CronScheduleConfig = {
+        ...prev,
+        lastRunAt: undefined,
+        nextRunAt: undefined,
+        runHistory: [],
+        channels: resetChannels,
       };
       localStorage.setItem('everytango_cron_config', JSON.stringify(updated));
       return updated;
@@ -494,7 +530,9 @@ Click the "Apply to Live Site" button below to update the homepage banner and he
         addCrawlingChannel,
         updateCrawlingChannel,
         deleteCrawlingChannel,
+        deleteUnexecutedChannels,
         toggleCrawlingChannel,
+        resetAllCrawlRecords,
         autoUpdateCuratedNotice,
         callGeminiWebsiteManager,
       }}

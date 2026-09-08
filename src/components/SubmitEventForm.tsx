@@ -540,7 +540,7 @@ export const SubmitEventForm: React.FC<SubmitEventFormProps> = ({
                 <option value="">-- Choose an event ({filteredEventsForPicker.length} displayed) --</option>
                 {filteredEventsForPicker.map((ev) => (
                   <option key={ev.id} value={ev.id}>
-                    [{ev.start_date.replace(/-/g, '/')}] {ev.event_name} - {ev.city}, {ev.country_code} ({ev.status})
+                    [{ev.start_date}] {ev.event_name} - {ev.city}, {ev.country_code} ({ev.status})
                   </option>
                 ))}
               </select>
@@ -559,7 +559,7 @@ export const SubmitEventForm: React.FC<SubmitEventFormProps> = ({
                   {currentlyEditingEvent.status}
                 </span>
                 <span className="text-blue-600/70 font-mono text-[11px] shrink-0">
-                  {currentlyEditingEvent.start_date.replace(/-/g, '/')}
+                  {currentlyEditingEvent.start_date}
                 </span>
               </div>
               <div className="flex items-center gap-2 shrink-0">

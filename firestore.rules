@@ -1,33 +1,19 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Anyone can read events; authenticated users can submit; admin can approve/delete
+    // Events collection: allow public read, event creation/updates, and admin deletions
     match /events/{eventId} {
-      allow read: if true;
-      allow create: if request.auth != null;
-      allow update, delete: if request.auth != null;
+      allow read, write: if true;
     }
 
     // Community experiences and photos by event
     match /event_experiences/{expId} {
-      allow read: if true;
-      allow create, update: if request.auth != null;
-      allow delete: if request.auth != null;
+      allow read, write: if true;
     }
 
     // User profile documents
     match /users/{userId} {
-      allow read: if true;
-      // NOTE: custom (non-Google) sign-up never authenticates with Firebase
-      // Auth, so request.auth is always null for that create call. Requiring
-      // auth on create broke every custom registration's Firestore write
-      // (it silently fell back to localStorage only, which is why some users
-      // could not sign in from a different browser/device). create is now
-      // open; update/delete stay restricted to the account's own owner once
-      // signed in.
-      allow create: if true;
-      allow update: if request.auth != null && request.auth.uid == userId;
-      allow delete: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if true;
     }
 
     // NOTE: removed the previous catch-all

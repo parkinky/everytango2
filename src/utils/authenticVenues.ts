@@ -246,6 +246,17 @@ export const CITY_AUTHENTIC_VENUES: Record<string, AuthenticVenue[]> = {
     },
   ],
 
+  // United States - Roswell, GA
+  roswell: [
+    {
+      name: 'Ballroom Impact (Tango Bar Atlanta)',
+      address: 'Ballroom Impact, 1425 Market Blvd, Suite 525, Roswell, GA 30076',
+      city: 'Roswell',
+      state: 'GA',
+      countryCode: 'US',
+    },
+  ],
+
   // United States - Birmingham, AL
   birmingham: [
     {
@@ -529,6 +540,7 @@ export function getAuthenticVenueForCity(
   else if (lookupKey.includes('houston')) lookupKey = 'houston';
   else if (lookupKey.includes('montreal') || lookupKey.includes('montréal')) lookupKey = 'montreal';
   else if (lookupKey.includes('atlanta')) lookupKey = 'atlanta';
+  else if (lookupKey.includes('roswell') || lookupKey.includes('rosewell')) lookupKey = 'roswell';
   else if (lookupKey.includes('birmingham')) lookupKey = 'birmingham';
   else if (lookupKey.includes('buenos aires') || lookupKey === 'caba') lookupKey = 'buenos aires';
   else if (lookupKey.includes('new york') || lookupKey === 'nyc') lookupKey = 'new york';
@@ -639,6 +651,19 @@ export function repairAndNormalizeEvent(ev: TangoEvent): { event: TangoEvent; ch
       fixedState = 'TX';
       changed = true;
     }
+  } else if (lowerCity.includes('roswell') || lowerCity.includes('rosewell')) {
+    if (fixedCountry !== 'US') {
+      fixedCountry = 'US';
+      changed = true;
+    }
+    if (!fixedState || fixedState === 'US') {
+      fixedState = 'GA';
+      changed = true;
+    }
+    if (fixedCity.toLowerCase() === 'rosewell') {
+      fixedCity = 'Roswell';
+      changed = true;
+    }
   }
 
   // 2. Fix Placeholder / Generic Addresses
@@ -669,18 +694,65 @@ export function repairAndNormalizeEvent(ev: TangoEvent): { event: TangoEvent; ch
     }
   }
 
-  // 4. Normalize and repair source_url (e.g. resolve generic Facebook group URLs to in-group search URLs)
+  // 4. Normalize and repair source_url (repair corrupted search.daum.net or dummy post IDs)
   let fixedSourceUrl = ev.source_url;
   if (ev.source_url) {
-    const resolvedLink = resolveDirectSourceUrl({
-      source_url: ev.source_url,
-      event_name: ev.event_name,
-      city: fixedCity,
-      country_code: fixedCountry,
-      start_date: ev.start_date,
-    });
-    if (resolvedLink.isTransformed && resolvedLink.primaryUrl !== ev.source_url) {
-      fixedSourceUrl = resolvedLink.primaryUrl;
+    // If corrupted by previous search.daum.net rewrite, recover authentic URL
+    if (/search\.daum\.net/i.test(ev.source_url)) {
+      if (fixedCountry === 'KR' || lowerCity.includes('seoul')) {
+        fixedSourceUrl = 'https://cafe.daum.net/elbulin';
+      } else if (lowerCity.includes('atlanta')) {
+        fixedSourceUrl = 'https://www.facebook.com/groups/tangobaratlanta/events';
+      } else if (lowerCity.includes('tokyo')) {
+        fixedSourceUrl = 'https://www.facebook.com/groups/tangotokyo/events';
+      } else {
+        fixedSourceUrl = 'https://tangomarathons.com';
+      }
+      changed = true;
+    } else if (
+      /facebook\.com\/events\/atlantatangoevents/i.test(ev.source_url) ||
+      (ev.id === 'crawler_evt_atlanta_winter_warmup' && ev.source_url?.includes('atlantatangoevents'))
+    ) {
+      fixedSourceUrl = 'https://www.facebook.com/groups/tangobaratlanta/events';
+      changed = true;
+    } else if (/facebook\.com\/events\/[a-zA-Z]/i.test(ev.source_url) && !/facebook\.com\/events\/\d{6,}/i.test(ev.source_url)) {
+      // Non-numeric pseudo event slugs -> resolve to city authentic community events tab
+      if (lowerCity.includes('atlanta')) {
+        fixedSourceUrl = 'https://www.facebook.com/groups/tangobaratlanta/events';
+        changed = true;
+      } else if (lowerCity.includes('tokyo')) {
+        fixedSourceUrl = 'https://www.facebook.com/groups/tangotokyo/events';
+        changed = true;
+      } else if (lowerCity.includes('birmingham')) {
+        fixedSourceUrl = 'https://www.facebook.com/groups/birminghamtango/events';
+        changed = true;
+      } else if (lowerCity.includes('new york') || lowerCity.includes('nyc')) {
+        fixedSourceUrl = 'https://www.facebook.com/groups/nyctangocommunity/events';
+        changed = true;
+      }
+    }
+  }
+
+  // 5. Clean up artificial lengthy crawler composite titles if present
+  let fixedEventName = ev.event_name;
+  if (ev.event_name) {
+    if (ev.event_name.startsWith('Korea Tango Community & Milonga Club Directory')) {
+      fixedEventName = ev.event_name.replace(
+        'Korea Tango Community & Milonga Club Directory',
+        'Seoul Tango Studio Sol'
+      ).trim();
+      changed = true;
+    } else if (ev.event_name.startsWith('Facebook (Atlanta & Birmingham Tango Communities)')) {
+      fixedEventName = ev.event_name.replace(
+        'Facebook (Atlanta & Birmingham Tango Communities)',
+        'Atlanta Tango Bar'
+      ).trim();
+      changed = true;
+    } else if (ev.event_name.startsWith('Tokyo Argentine Tango Community & Milonga Guide')) {
+      fixedEventName = ev.event_name.replace(
+        'Tokyo Argentine Tango Community & Milonga Guide',
+        'Tokyo Ginza Social'
+      ).trim();
       changed = true;
     }
   }
@@ -692,6 +764,7 @@ export function repairAndNormalizeEvent(ev: TangoEvent): { event: TangoEvent; ch
   return {
     event: {
       ...ev,
+      event_name: fixedEventName,
       address: fixedAddress,
       city: fixedCity,
       country_code: fixedCountry,

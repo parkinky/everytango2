@@ -52,17 +52,49 @@ export function isDuplicateEvent(
   existingEvents: TangoEvent[]
 ): { isDup: boolean; duplicateOf?: TangoEvent; reason?: string } {
   for (const existing of existingEvents) {
-    // Check exact source_url
+    // Exact event ID match
+    if (candidate.id && existing.id && candidate.id === existing.id) {
+      return {
+        isDup: true,
+        duplicateOf: existing,
+        reason: `Matched existing event ID: ${existing.id}`,
+      };
+    }
+
+    // Check source_url: Only reject on source_url if it's a specific single-event URL (e.g. /posts/, /events/1234, etc.)
+    // or if the event name is identical. Do NOT reject different events sharing a group/channel hub URL!
     if (
       candidate.source_url &&
       existing.source_url &&
       candidate.source_url.trim().toLowerCase() === existing.source_url.trim().toLowerCase()
     ) {
-      return {
-        isDup: true,
-        duplicateOf: existing,
-        reason: `Matched existing source URL: ${existing.event_name}`,
-      };
+      const sUrl = candidate.source_url.toLowerCase();
+      const isGeneralHubUrl =
+        (sUrl.includes('/groups/') && !sUrl.includes('/posts/') && !sUrl.includes('/permalink/') && !/\/\d{8,}/.test(sUrl)) ||
+        sUrl.endsWith('/events') ||
+        sUrl.endsWith('/events/') ||
+        sUrl.includes('/schedule') ||
+        sUrl.includes('/calendar');
+
+      if (!isGeneralHubUrl) {
+        return {
+          isDup: true,
+          duplicateOf: existing,
+          reason: `Matched specific event source URL: ${existing.event_name}`,
+        };
+      } else {
+        // If it's a general hub URL, only duplicate if event name or date is also identical
+        if (
+          candidate.event_name?.trim().toLowerCase() === existing.event_name?.trim().toLowerCase() &&
+          candidate.start_date === existing.start_date
+        ) {
+          return {
+            isDup: true,
+            duplicateOf: existing,
+            reason: `Identical event name ("${existing.event_name}") and date (${candidate.start_date}) from channel`,
+          };
+        }
+      }
     }
 
     // Check same date + city + high name similarity
@@ -110,15 +142,15 @@ export async function hashAnswer(text: string): Promise<string> {
   return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-// Format date range: 2026/10/15(Thu) ~ 2026/10/18(Sun)
+// Format date range: 2026-10-15(Thu) ~ 2026-10-18(Sun)
 export function formatDateRange(startDateStr: string, endDateStr: string): string {
   if (!startDateStr) return '';
   const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   
   const start = new Date(startDateStr + 'T00:00:00');
   const startDay = weekdays[start.getDay()];
-  const startSlash = startDateStr.replace(/-/g, '/');
-  const startFormatted = `${startSlash}(${startDay})`;
+  const startHyphen = startDateStr.replace(/[/.]/g, '-');
+  const startFormatted = `${startHyphen}(${startDay})`;
 
   if (!endDateStr || endDateStr === startDateStr) {
     return startFormatted;
@@ -126,23 +158,23 @@ export function formatDateRange(startDateStr: string, endDateStr: string): strin
 
   const end = new Date(endDateStr + 'T00:00:00');
   const endDay = weekdays[end.getDay()];
-  const endSlash = endDateStr.replace(/-/g, '/');
-  const endFormatted = `${endSlash}(${endDay})`;
+  const endHyphen = endDateStr.replace(/[/.]/g, '-');
+  const endFormatted = `${endHyphen}(${endDay})`;
 
   return `${startFormatted} ~ ${endFormatted}`;
 }
 
 // Format date into 2 lines for ultra-compact display:
-// Line 1: startDate(weekday) e.g. 2026/09/11(Fri)
-// Line 2: ~ endDate(weekday) e.g. ~ 2026/09/13(Sun)
+// Line 1: startDate(weekday) e.g. 2026-09-11(Fri)
+// Line 2: ~ endDate(weekday) e.g. ~ 2026-09-13(Sun)
 export function formatTwoLineDate(startDateStr: string, endDateStr: string): { start: string; end: string | null } {
   if (!startDateStr) return { start: '', end: null };
   const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   
   const start = new Date(startDateStr + 'T00:00:00');
   const startDay = weekdays[start.getDay()] || '';
-  const startSlash = startDateStr.replace(/-/g, '/');
-  const startFormatted = `${startSlash}(${startDay})`;
+  const startHyphen = startDateStr.replace(/[/.]/g, '-');
+  const startFormatted = `${startHyphen}(${startDay})`;
 
   if (!endDateStr || endDateStr === startDateStr) {
     return { start: startFormatted, end: null };
@@ -150,8 +182,8 @@ export function formatTwoLineDate(startDateStr: string, endDateStr: string): { s
 
   const end = new Date(endDateStr + 'T00:00:00');
   const endDay = weekdays[end.getDay()] || '';
-  const endSlash = endDateStr.replace(/-/g, '/');
-  const endFormatted = `~ ${endSlash}(${endDay})`;
+  const endHyphen = endDateStr.replace(/[/.]/g, '-');
+  const endFormatted = `~ ${endHyphen}(${endDay})`;
 
   return { start: startFormatted, end: endFormatted };
 }

@@ -1,6 +1,6 @@
 {
   "name": "Everytango",
-  "description": "Global Argentine tango festival, marathon, encuentro, and milonga directory with multi-language support, automated crawler, and event submission workflow.",
+  "description": "Global Argentine tango festival, marathon, encuentro, and milonga directory with multi-language support, automated site event extraction, and event moderation workflow.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

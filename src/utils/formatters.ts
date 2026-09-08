@@ -183,11 +183,12 @@ export function convertPriceToUSD(
   if (numbers.length === 1) {
     const val = parseNumber(numbers[0]);
     const usd = Math.round(val * rate);
+    const hasTilde = str.startsWith('~');
     
     // If it's already USD
     if (currency === 'USD') {
       return {
-        usdFormatted: `$${usd}`,
+        usdFormatted: hasTilde ? `~$${usd}` : `$${usd}`,
         originalFormatted: str,
         approxUsd: usd,
         isFree: usd === 0,
@@ -204,12 +205,13 @@ export function convertPriceToUSD(
     // Range of prices
     const low = Math.round(parseNumber(numbers[0]) * rate);
     const high = Math.round(parseNumber(numbers[1]) * rate);
+    const hasTilde = str.startsWith('~');
 
     if (currency === 'USD') {
       return {
-        usdFormatted: `$${low} - $${high}`,
+        usdFormatted: hasTilde ? `~$${high}` : `$${low} - $${high}`,
         originalFormatted: str,
-        approxUsd: low,
+        approxUsd: high,
         isFree: false,
       };
     }
@@ -229,9 +231,48 @@ export interface TwoLineCrawledDate {
 }
 
 /**
- * Formats a date into "YYYY/MM/DD" in CST (Central Standard Time, America/Chicago)
- * Plain dates like "2026-09-09" are converted to "2026/09/09".
- * ISO timestamps are converted to America/Chicago time and formatted as "YYYY/MM/DD".
+ * Returns today's date in Central Standard Time (America/Chicago) as standard ISO format: YYYY-MM-DD
+ * e.g. "2026-09-07"
+ */
+export function getTodayCSTIsoDate(): string {
+  try {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Chicago',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    return formatter.format(new Date()); // produces "YYYY-MM-DD"
+  } catch {
+    return new Date().toISOString().substring(0, 10);
+  }
+}
+
+/**
+ * Normalizes any date string (YYYY/MM/DD, YYYY-MM-DD, ISO timestamp) into standard YYYY-MM-DD format
+ */
+export function normalizeDateToIso(dateInput?: string | number | Date | null): string {
+  if (!dateInput) return '';
+  if (dateInput instanceof Date) {
+    if (isNaN(dateInput.getTime())) return '';
+    return dateInput.toISOString().substring(0, 10);
+  }
+  const str = String(dateInput).trim();
+  if (!str || str === '—' || str === '-') return '';
+  // Match YYYY-MM-DD or YYYY/MM/DD
+  const match = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (match) {
+    const y = match[1];
+    const m = match[2].padStart(2, '0');
+    const d = match[3].padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return str.substring(0, 10).replace(/\//g, '-');
+}
+
+/**
+ * Formats a date into standard "YYYY-MM-DD" in CST (Central Standard Time, America/Chicago)
+ * Plain dates and ISO timestamps are normalized to "YYYY-MM-DD".
  */
 export function formatDateToCST(dateInput?: string | number | Date | null): string {
   if (!dateInput) return '—';
@@ -239,24 +280,24 @@ export function formatDateToCST(dateInput?: string | number | Date | null): stri
   if (str === '—' || str === '-' || str.toLowerCase() === 'none') return '—';
 
   // If already plain YYYY-MM-DD or YYYY/MM/DD without time
-  if (/^\d{4}[-/]\d{2}[-/]\d{2}$/.test(str)) {
-    return str.replace(/-/g, '/');
+  if (/^\d{4}[-/.]\d{2}[-/.]\d{2}$/.test(str)) {
+    return str.replace(/[/.]/g, '-');
   }
 
   try {
     const d = new Date(str);
-    if (isNaN(d.getTime())) return str.substring(0, 10).replace(/-/g, '/');
+    if (isNaN(d.getTime())) return str.substring(0, 10).replace(/[/.]/g, '-');
 
     const formatted = new Intl.DateTimeFormat('en-CA', {
       timeZone: 'America/Chicago',
       year: 'numeric',
       month: '2-digit',
       day: '2-digit',
-    }).format(d);
+    }).format(d); // Produces YYYY-MM-DD natively
 
-    return formatted.replace(/-/g, '/');
+    return formatted;
   } catch {
-    return str.substring(0, 10).replace(/-/g, '/');
+    return str.substring(0, 10).replace(/[/.]/g, '-');
   }
 }
 
@@ -291,7 +332,7 @@ export function formatTimeToCST(
 }
 
 /**
- * Formats full datetime in CST (America/Chicago) with "YYYY/MM/DD HH:mm:ss (CST)"
+ * Formats full datetime in CST (America/Chicago) with "YYYY-MM-DD HH:mm:ss (CST)"
  */
 export function formatDateTimeToCST(
   dateInput?: string | number | Date | null,
@@ -303,7 +344,7 @@ export function formatDateTimeToCST(
 
   try {
     const d = new Date(str);
-    if (isNaN(d.getTime())) return str.replace(/-/g, '/');
+    if (isNaN(d.getTime())) return str.replace(/[/.]/g, '-');
 
     const dateStr = formatDateToCST(d);
     const timeStr = formatTimeToCST(d, includeSeconds);
@@ -311,13 +352,13 @@ export function formatDateTimeToCST(
     if (!timeStr) return dateStr;
     return `${dateStr} ${timeStr}`;
   } catch {
-    return str.replace(/-/g, '/');
+    return str.replace(/[/.]/g, '-');
   }
 }
 
 /**
  * Formats a crawled or created_at timestamp into a 2-line display in CST:
- * Line 1: YYYY/MM/DD
+ * Line 1: YYYY-MM-DD
  * Line 2: HH:mm (CST)
  */
 export function formatCrawledDate(createdAt?: string | null): TwoLineCrawledDate {
@@ -327,7 +368,7 @@ export function formatCrawledDate(createdAt?: string | null): TwoLineCrawledDate
     if (isNaN(d.getTime())) {
       const clean = createdAt.trim();
       return {
-        date: clean.substring(0, 10).replace(/-/g, '/'),
+        date: clean.substring(0, 10).replace(/[/.]/g, '-'),
         time: clean.length > 10 ? `${clean.substring(11, 16)} (CST)` : '',
       };
     }
@@ -338,6 +379,6 @@ export function formatCrawledDate(createdAt?: string | null): TwoLineCrawledDate
       time: timeFormatted,
     };
   } catch {
-    return { date: String(createdAt).substring(0, 10).replace(/-/g, '/'), time: '' };
+    return { date: String(createdAt).substring(0, 10).replace(/[/.]/g, '-'), time: '' };
   }
 }
