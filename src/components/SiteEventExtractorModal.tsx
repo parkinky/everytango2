@@ -17,6 +17,19 @@ import {
 import { TangoEvent, EventType, EventStatus, CrawlingChannel } from '../types';
 import { useEvents } from '../context/EventsContext';
 import { isDuplicateEvent } from '../utils/dedup';
+import { auth } from '../firebase';
+
+// This modal is an admin-only tool and the endpoint it calls makes the
+// server fetch third-party URLs, so it now requires the caller to be a
+// signed-in admin (see requireAdmin in server.ts). Attach the ID token.
+async function adminAuthHeaders(): Promise<Record<string, string>> {
+  try {
+    const idToken = await auth.currentUser?.getIdToken();
+    return idToken ? { Authorization: `Bearer ${idToken}` } : {};
+  } catch {
+    return {};
+  }
+}
 
 interface ExtractedSiteEvent {
   id?: string;
@@ -76,7 +89,7 @@ export const SiteEventExtractorModal: React.FC<SiteEventExtractorModalProps> = (
     try {
       const resp = await fetch('/api/crawler/extract-site-events', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(await adminAuthHeaders()) },
         body: JSON.stringify({
           url: targetChannel.url,
           channelName: targetChannel.name,
@@ -146,7 +159,7 @@ export const SiteEventExtractorModal: React.FC<SiteEventExtractorModalProps> = (
     try {
       const resp = await fetch('/api/crawler/extract-site-events', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(await adminAuthHeaders()) },
         body: JSON.stringify({
           url: channel?.url || 'https://www.facebook.com/groups/tangobaratlanta/events',
           channelName: channel?.name || 'Tango Bar Atlanta',

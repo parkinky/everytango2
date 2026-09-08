@@ -14,7 +14,6 @@ import {
 import { SupportedLanguage } from '../types';
 import { translations, COUNTRY_LIST, SECURITY_QUESTION_OPTIONS } from '../i18n';
 import { useAuth } from '../context/AuthContext';
-import { hashAnswer } from '../utils/dedup';
 
 interface AuthModalProps {
   currentLang: SupportedLanguage;
@@ -163,11 +162,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     setLoading(true);
     setErrorMsg('');
 
-    // Pre-hash security answers for secure storage
-    const h1 = await hashAnswer(a1);
-    const h2 = await hashAnswer(a2);
-    const h3 = await hashAnswer(a3);
-
+    // Security answers are sent as plaintext over HTTPS and hashed server-side
+    // (see /api/auth/register) - the client never computes or stores the hash.
     const res = await registerCustom(
       {
         first_name: regFirstName.trim(),
@@ -180,9 +176,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         phone: regPhone.trim(),
         role: 'USER',
         security_questions: [
-          { question_number: 1, question_text: q1, answer_hash: h1 },
-          { question_number: 2, question_text: q2, answer_hash: h2 },
-          { question_number: 3, question_text: q3, answer_hash: h3 },
+          { question_number: 1, question_text: q1, answer: a1 },
+          { question_number: 2, question_text: q2, answer: a2 },
+          { question_number: 3, question_text: q3, answer: a3 },
         ],
       },
       regPassword

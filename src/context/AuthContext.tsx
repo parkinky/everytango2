@@ -1,40 +1,55 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { 
-  User, 
-  signInWithPopup, 
-  signOut as fbSignOut, 
+import {
+  User,
+  signInWithPopup,
+  signInWithCustomToken,
+  signOut as fbSignOut,
   onAuthStateChanged,
-  signInAnonymously
 } from 'firebase/auth';
-import { 
-  collection, 
-  doc, 
-  getDoc, 
-  setDoc, 
-  updateDoc,
-  deleteDoc,
-  getDocs, 
-  query, 
-  where 
-} from 'firebase/firestore';
-import { auth, googleProvider, db } from '../firebase';
-import { UserProfile, UserRole } from '../types';
-import { hashAnswer } from '../utils/dedup';
+import { auth, googleProvider } from '../firebase';
+import { UserProfile, UserRole, RegisterSecurityQuestionInput } from '../types';
+
+// ---------------------------------------------------------------------------
+// SECURITY NOTE
+// ---------------------------------------------------------------------------
+// This file used to talk to Firestore directly from the browser for the
+// custom (non-Google) login system: it stored plaintext passwords in a
+// `password_hash` field, shipped hardcoded admin/demo credentials and
+// security-question answers in this source file, and trusted a
+// `localStorage` blob as a "session" with no server verification at all.
+// Combined with Firestore rules that allowed open read/write, that meant
+// anyone could read every user's email/phone/password directly, forge an
+// ADMIN session in the browser console, and reset the admin password using
+// the hardcoded security answers that were sitting right here in the repo.
+//
+// All of that has been moved server-side (see server.ts, /api/auth/* and
+// /api/admin/*). This context now only calls those endpoints. Successful
+// custom login/registration signs the user into real Firebase Auth via a
+// server-minted custom token (signInWithCustomToken), so both Google and
+// "custom" logins end up as a normal Firebase Auth session - which is what
+// lets the Firestore rules for the `users` collection be locked down to
+// `if false` (server-only access via the Admin SDK).
+// ---------------------------------------------------------------------------
 
 interface AuthContextType {
   currentUser: User | null;
   userProfile: UserProfile | null;
   loading: boolean;
   loginWithGoogle: () => Promise<void>;
-  loginCustom: (usernameOrEmail: string, passwordHash: string) => Promise<{ success: boolean; error?: string }>;
+  loginCustom: (usernameOrEmail: string, password: string) => Promise<{ success: boolean; error?: string }>;
   checkUsernameExists: (username: string) => Promise<boolean>;
-  registerCustom: (profile: Omit<UserProfile, 'id' | 'created_at'>, passwordHash: string) => Promise<{ success: boolean; error?: string }>;
+  registerCustom: (
+    profile: Omit<UserProfile, 'id' | 'created_at' | 'security_questions'> & {
+      security_questions: RegisterSecurityQuestionInput[];
+    },
+    password: string
+  ) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
   findIdByEmailAndPhone: (email: string, phone: string) => Promise<{ found: boolean; username?: string; error?: string }>;
   fetchSecurityQuestionsForUser: (usernameOrEmail: string) => Promise<{ found: boolean; questions?: { number: number; text: string }[]; error?: string }>;
   verifySingleSecurityAnswer: (usernameOrEmail: string, questionNumber: number, answerPlain: string) => Promise<{ success: boolean; error?: string }>;
   verifySingleAnswerAndResetPw: (usernameOrEmail: string, questionNumber: number, answerPlain: string, newPasswordPlain: string) => Promise<{ success: boolean; error?: string }>;
-  verifyAnswersAndResetPw: (usernameOrEmail: string, answers: string[], newPasswordHash: string) => Promise<{ success: boolean; error?: string }>;
+  verifyAnswersAndResetPw: (usernameOrEmail: string, answers: string[], newPassword: string) => Promise<{ success: boolean; error?: string }>;
   getAllUsers: () => Promise<UserProfile[]>;
   updateUserRole: (userId: string, newRole: UserRole) => Promise<void>;
   updateUserProfile: (userId: string, updates: Partial<UserProfile>) => Promise<{ success: boolean; error?: string }>;
@@ -44,62 +59,68 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+// Attaches the current Firebase ID token (if any) to a JSON request. Used for
+// every endpoint that requires the caller to be logged in / an admin - the
+// server independently re-verifies this token and the caller's role, it
+// never trusts anything the client claims about itself.
+async function authedFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  let idToken: string | undefined;
+  try {
+    idToken = await auth.currentUser?.getIdToken();
+  } catch {
+    idToken = undefined;
+  }
+  return fetch(url, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
+      ...(options.headers || {}),
+    },
+  });
+}
+
+async function safeJson(res: Response): Promise<any> {
+  try {
+    return await res.json();
+  } catch {
+    return {};
+  }
+}
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
-  // Load custom logged in user from localStorage if not using Firebase Auth session
   useEffect(() => {
+    // One-time cleanup: earlier builds stored a forgeable "session" (and a
+    // fake local user database) directly in localStorage. Those are no
+    // longer read anywhere, but remove them so a stale/tampered value from
+    // before this fix can never be confused with anything.
+    try {
+      localStorage.removeItem('everytango_custom_user');
+      localStorage.removeItem('everytango_db_users');
+    } catch {
+      // ignore (e.g. storage disabled)
+    }
+
     const unsub = onAuthStateChanged(auth, async (fbUser) => {
       setCurrentUser(fbUser);
       if (fbUser) {
         try {
-          const userDocRef = doc(db, 'users', fbUser.uid);
-          const snap = await getDoc(userDocRef);
-          if (snap.exists()) {
-            setUserProfile(snap.data() as UserProfile);
-          } else {
-            // Create default profile for Google user
-            const newProfile: UserProfile = {
-              id: fbUser.uid,
-              username: fbUser.email?.split('@')[0] || 'TangoDancer',
-              email: fbUser.email || '',
-              country_code: 'US',
-              city: 'Global',
-              phone: '',
-              role: fbUser.email === 'parkinky@gmail.com' ? 'ADMIN' : 'USER',
-              created_at: new Date().toISOString(),
-            };
-            await setDoc(userDocRef, newProfile);
-            setUserProfile(newProfile);
-          }
+          const idToken = await fbUser.getIdToken();
+          const res = await fetch('/api/auth/me', {
+            headers: { Authorization: `Bearer ${idToken}` },
+          });
+          const data = await safeJson(res);
+          setUserProfile(res.ok && data.success ? data.profile : null);
         } catch (err) {
-          console.warn('Could not fetch firestore user profile, falling back to local:', err);
-          const newProfile: UserProfile = {
-            id: fbUser.uid,
-            username: fbUser.email?.split('@')[0] || 'TangoDancer',
-            email: fbUser.email || '',
-            country_code: 'US',
-            city: 'Global',
-            phone: '',
-            role: fbUser.email === 'parkinky@gmail.com' ? 'ADMIN' : 'USER',
-            created_at: new Date().toISOString(),
-          };
-          setUserProfile(newProfile);
-        }
-      } else {
-        // Check local custom session
-        const savedSession = localStorage.getItem('everytango_custom_user');
-        if (savedSession) {
-          try {
-            setUserProfile(JSON.parse(savedSession));
-          } catch {
-            setUserProfile(null);
-          }
-        } else {
+          console.warn('Could not load user profile:', err);
           setUserProfile(null);
         }
+      } else {
+        setUserProfile(null);
       }
       setLoading(false);
     });
@@ -119,99 +140,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const loginCustom = async (usernameOrEmail: string, passwordHash: string): Promise<{ success: boolean; error?: string }> => {
+  const loginCustom = async (usernameOrEmail: string, password: string): Promise<{ success: boolean; error?: string }> => {
     try {
-      const q = usernameOrEmail.trim().toLowerCase();
-      // Look up in Firestore users collection or local storage cache
-      let foundUser: any = null;
-      try {
-        const usersRef = collection(db, 'users');
-        const snap1 = await getDocs(query(usersRef, where('email', '==', q)));
-        if (!snap1.empty) {
-          foundUser = snap1.docs[0].data();
-        } else {
-          const snap2 = await getDocs(query(usersRef, where('username', '==', q)));
-          if (!snap2.empty) {
-            foundUser = snap2.docs[0].data();
-          }
-        }
-      } catch (err) {
-        console.warn('Firebase query failed, checking local users:', err);
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ usernameOrEmail, password }),
+      });
+      const data = await safeJson(res);
+      if (!res.ok || !data.success) {
+        return { success: false, error: data.error || 'Login failed' };
       }
-
-      // Check local registered users store if not found in remote
-      if (!foundUser) {
-        const localUsers = JSON.parse(localStorage.getItem('everytango_db_users') || '[]');
-        foundUser = localUsers.find((u: any) => 
-          u.email.toLowerCase() === q || u.username.toLowerCase() === q
-        );
-      }
-
-      // Admin account: parkinky (id=parkinky, pw=admin)
-      if (!foundUser && (q === 'parkinky' || q === 'parkinky@gmail.com')) {
-        foundUser = {
-          id: 'admin_parkinky',
-          username: 'parkinky',
-          email: 'parkinky@gmail.com',
-          password_hash: 'admin',
-          country_code: 'KR',
-          city: 'Seoul',
-          phone: '+82 10-1234-5678',
-          role: 'ADMIN',
-          created_at: '2026-01-01T00:00:00Z',
-          security_questions: [
-            { question_number: 1, question_text: 'What was your first pet’s name?', answer_hash: 'tango' },
-            { question_number: 2, question_text: 'In what city was your first tango festival?', answer_hash: 'seoul' },
-            { question_number: 3, question_text: 'What is your favorite tango orchestra?', answer_hash: 'di sarli' }
-          ]
-        };
-      }
-
-      // Admin demo fallback account
-      if (!foundUser && (q === 'admin' || q === 'admin@everytango.com')) {
-        foundUser = {
-          id: 'admin_master_1',
-          username: 'admin',
-          email: 'admin@everytango.com',
-          password_hash: 'admin123',
-          country_code: 'US',
-          city: 'Buenos Aires',
-          phone: '+1-555-0199',
-          role: 'ADMIN',
-          created_at: '2026-01-01T00:00:00Z'
-        };
-      }
-
-      if (!foundUser) {
-        return { success: false, error: 'User not found. Please check your username/email or register.' };
-      }
-
-      // Allow admin credentials for parkinky / admin or standard password match
-      const isValidPassword = 
-        foundUser.password_hash === passwordHash ||
-        (foundUser.username === 'parkinky' && (passwordHash === 'admin' || passwordHash === 'admin123')) ||
-        (foundUser.username === 'admin' && (passwordHash === 'admin' || passwordHash === 'admin123'));
-
-      if (!isValidPassword) {
-        return { success: false, error: 'Invalid password. Please try again or recover your password.' };
-      }
-
-      const profile: UserProfile = {
-        id: foundUser.id,
-        username: foundUser.username,
-        email: foundUser.email,
-        first_name: foundUser.first_name || '',
-        last_name: foundUser.last_name || '',
-        country_code: foundUser.country_code || 'US',
-        state: foundUser.state || '',
-        city: foundUser.city || '',
-        phone: foundUser.phone || '',
-        role: foundUser.role || 'USER',
-        created_at: foundUser.created_at || new Date().toISOString(),
-      };
-
-      setUserProfile(profile);
-      localStorage.setItem('everytango_custom_user', JSON.stringify(profile));
+      await signInWithCustomToken(auth, data.token);
       return { success: true };
     } catch (err: any) {
       return { success: false, error: err.message || 'Login failed' };
@@ -219,77 +159,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const checkUsernameExists = async (username: string): Promise<boolean> => {
-    const clean = username.trim().toLowerCase();
+    const clean = username.trim();
     if (!clean) return false;
-
-    // 1. Reserved administrative usernames
-    if (clean === 'parkinky' || clean === 'admin') {
-      return true;
-    }
-
-    // 2. Check local users store
     try {
-      const localUsers = JSON.parse(localStorage.getItem('everytango_db_users') || '[]');
-      const foundLocal = localUsers.some(
-        (u: any) => (u.username || '').trim().toLowerCase() === clean
-      );
-      if (foundLocal) return true;
-    } catch (e) {
-      console.warn('Local users parse error during username check:', e);
-    }
-
-    // 3. Check Firestore
-    try {
-      const usersRef = collection(db, 'users');
-      const snap = await getDocs(query(usersRef, where('username', '==', clean)));
-      if (!snap.empty) return true;
-
-      // Check case variations if needed
-      if (username.trim() !== clean) {
-        const snapCase = await getDocs(query(usersRef, where('username', '==', username.trim())));
-        if (!snapCase.empty) return true;
-      }
+      const res = await fetch('/api/auth/check-username', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: clean }),
+      });
+      const data = await safeJson(res);
+      return !!data.exists;
     } catch (err) {
-      console.warn('Firestore query error during username check:', err);
+      console.warn('Username check failed:', err);
+      return false;
     }
-
-    return false;
   };
 
   const registerCustom = async (
-    profileData: Omit<UserProfile, 'id' | 'created_at'>,
-    passwordHash: string
+    profileData: Omit<UserProfile, 'id' | 'created_at' | 'security_questions'> & {
+      security_questions: RegisterSecurityQuestionInput[];
+    },
+    password: string
   ): Promise<{ success: boolean; error?: string }> => {
     try {
-      const newId = 'usr_' + Math.random().toString(36).substr(2, 9);
-      const now = new Date().toISOString();
-      const newRecord = {
-        id: newId,
-        ...profileData,
-        password_hash: passwordHash,
-        created_at: now,
-      };
-
-      // Save to Firestore
-      try {
-        await setDoc(doc(db, 'users', newId), newRecord);
-      } catch (err) {
-        console.warn('Could not save user to firestore, storing locally:', err);
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...profileData, password }),
+      });
+      const data = await safeJson(res);
+      if (!res.ok || !data.success) {
+        return { success: false, error: data.error || 'Registration failed' };
       }
-
-      // Also persist to localStorage backup
-      const localUsers = JSON.parse(localStorage.getItem('everytango_db_users') || '[]');
-      localUsers.push(newRecord);
-      localStorage.setItem('everytango_db_users', JSON.stringify(localUsers));
-
-      const profile: UserProfile = {
-        id: newId,
-        ...profileData,
-        created_at: now,
-      };
-
-      setUserProfile(profile);
-      localStorage.setItem('everytango_custom_user', JSON.stringify(profile));
+      await signInWithCustomToken(auth, data.token);
       return { success: true };
     } catch (err: any) {
       return { success: false, error: err.message || 'Registration failed' };
@@ -297,77 +199,42 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = async () => {
-    if (currentUser) {
+    try {
       await fbSignOut(auth);
+    } catch (err) {
+      console.warn('Sign out error:', err);
     }
-    localStorage.removeItem('everytango_custom_user');
     setUserProfile(null);
   };
 
   const findIdByEmailAndPhone = async (email: string, phone: string): Promise<{ found: boolean; username?: string; error?: string }> => {
-    const cleanEmail = email.trim().toLowerCase();
-    const cleanPhone = phone.trim().replace(/[^0-9+]/g, '');
-
-    // Check remote
     try {
-      const usersRef = collection(db, 'users');
-      const snap = await getDocs(query(usersRef, where('email', '==', cleanEmail)));
-      if (!snap.empty) {
-        const u = snap.docs[0].data();
-        const uPhone = (u.phone || '').trim().replace(/[^0-9+]/g, '');
-        if (uPhone === cleanPhone || !cleanPhone) {
-          return { found: true, username: u.username };
-        }
-      }
-    } catch (e) {
-      console.warn('Firestore find ID query err:', e);
+      const res = await fetch('/api/auth/find-id', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, phone }),
+      });
+      const data = await safeJson(res);
+      return { found: !!data.found, username: data.username, error: data.error };
+    } catch (err: any) {
+      return { found: false, error: err.message || 'Lookup failed' };
     }
-
-    // Check local store
-    const localUsers = JSON.parse(localStorage.getItem('everytango_db_users') || '[]');
-    const matched = localUsers.find((u: any) => {
-      const uPhone = (u.phone || '').trim().replace(/[^0-9+]/g, '');
-      return u.email.toLowerCase() === cleanEmail && (uPhone === cleanPhone || !cleanPhone);
-    });
-
-    if (matched) {
-      return { found: true, username: matched.username };
-    }
-
-    return { found: false, error: 'No account matched this email and phone number combination.' };
   };
 
-  const fetchSecurityQuestionsForUser = async (usernameOrEmail: string): Promise<{ found: boolean; questions?: { number: number; text: string }[]; error?: string }> => {
-    const q = usernameOrEmail.trim().toLowerCase();
-    let user: any = null;
-
+  const fetchSecurityQuestionsForUser = async (
+    usernameOrEmail: string
+  ): Promise<{ found: boolean; questions?: { number: number; text: string }[]; error?: string }> => {
     try {
-      const usersRef = collection(db, 'users');
-      const snap1 = await getDocs(query(usersRef, where('email', '==', q)));
-      if (!snap1.empty) user = snap1.docs[0].data();
-      else {
-        const snap2 = await getDocs(query(usersRef, where('username', '==', q)));
-        if (!snap2.empty) user = snap2.docs[0].data();
-      }
-    } catch (e) {
-      console.warn('Firestore fetch questions err:', e);
+      const res = await fetch('/api/auth/security-questions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ usernameOrEmail }),
+      });
+      const data = await safeJson(res);
+      return { found: !!data.found, questions: data.questions, error: data.error };
+    } catch (err: any) {
+      return { found: false, error: err.message || 'Could not retrieve security questions.' };
     }
-
-    if (!user) {
-      const localUsers = JSON.parse(localStorage.getItem('everytango_db_users') || '[]');
-      user = localUsers.find((u: any) => u.email.toLowerCase() === q || u.username.toLowerCase() === q);
-    }
-
-    if (!user || !user.security_questions || user.security_questions.length === 0) {
-      return { found: false, error: 'Account not found or no security questions configured for this user.' };
-    }
-
-    const questionList = user.security_questions.map((sq: any) => ({
-      number: sq.question_number,
-      text: sq.question_text
-    }));
-
-    return { found: true, questions: questionList };
   };
 
   const verifySingleSecurityAnswer = async (
@@ -375,60 +242,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     questionNumber: number,
     answerPlain: string
   ): Promise<{ success: boolean; error?: string }> => {
-    const q = usernameOrEmail.trim().toLowerCase();
-    let user: any = null;
-
     try {
-      const usersRef = collection(db, 'users');
-      const snap1 = await getDocs(query(usersRef, where('email', '==', q)));
-      if (!snap1.empty) {
-        user = snap1.docs[0].data();
-      } else {
-        const snap2 = await getDocs(query(usersRef, where('username', '==', q)));
-        if (!snap2.empty) {
-          user = snap2.docs[0].data();
-        }
+      const res = await fetch('/api/auth/verify-answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ usernameOrEmail, questionNumber, answer: answerPlain }),
+      });
+      const data = await safeJson(res);
+      if (!res.ok || !data.success) {
+        return { success: false, error: data.error || '보안 답변이 일치하지 않습니다.' };
       }
-    } catch (e) {
-      console.warn('Firestore verify single answer lookup err:', e);
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message || '보안 답변 확인에 실패했습니다.' };
     }
-
-    if (!user) {
-      const localUsers = JSON.parse(localStorage.getItem('everytango_db_users') || '[]');
-      user = localUsers.find((u: any) => u.email?.toLowerCase() === q || u.username?.toLowerCase() === q);
-    }
-
-    // Default admin fallback
-    if (!user && (q === 'parkinky' || q === 'parkinky@gmail.com')) {
-      user = {
-        username: 'parkinky',
-        email: 'parkinky@gmail.com',
-        security_questions: [
-          { question_number: 1, question_text: 'What was your first pet’s name?', answer_hash: 'tango' },
-          { question_number: 2, question_text: 'In what city was your first tango festival?', answer_hash: 'seoul' },
-          { question_number: 3, question_text: 'What is your favorite tango orchestra?', answer_hash: 'di sarli' }
-        ]
-      };
-    }
-
-    if (!user || !user.security_questions || user.security_questions.length === 0) {
-      return { success: false, error: '보안 질문이 등록되지 않은 사용자입니다.' };
-    }
-
-    const targetQ = user.security_questions.find((sq: any) => sq.question_number === questionNumber);
-    if (!targetQ) {
-      return { success: false, error: `보안 질문 #${questionNumber}번을 찾을 수 없습니다.` };
-    }
-
-    const expected = (targetQ.answer_hash || '').trim().toLowerCase();
-    const cleanProvided = (answerPlain || '').trim().toLowerCase();
-    const hashedProvided = await hashAnswer(cleanProvided);
-
-    if (expected !== cleanProvided && expected !== hashedProvided) {
-      return { success: false, error: '보안 답변이 일치하지 않습니다. 다시 입력하시거나 다른 질문을 선택해 주세요.' };
-    }
-
-    return { success: true };
   };
 
   const verifySingleAnswerAndResetPw = async (
@@ -437,306 +264,86 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     answerPlain: string,
     newPasswordPlain: string
   ): Promise<{ success: boolean; error?: string }> => {
-    const q = usernameOrEmail.trim().toLowerCase();
-    let userDocId: string | null = null;
-    let user: any = null;
-
     try {
-      const usersRef = collection(db, 'users');
-      const snap1 = await getDocs(query(usersRef, where('email', '==', q)));
-      if (!snap1.empty) {
-        userDocId = snap1.docs[0].id;
-        user = snap1.docs[0].data();
-      } else {
-        const snap2 = await getDocs(query(usersRef, where('username', '==', q)));
-        if (!snap2.empty) {
-          userDocId = snap2.docs[0].id;
-          user = snap2.docs[0].data();
-        }
+      const res = await fetch('/api/auth/reset-password-with-answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          usernameOrEmail,
+          questionNumber,
+          answer: answerPlain,
+          newPassword: newPasswordPlain,
+        }),
+      });
+      const data = await safeJson(res);
+      if (!res.ok || !data.success) {
+        return { success: false, error: data.error || 'Password update failed.' };
       }
-    } catch (e) {
-      console.warn('Firestore verify single answer and reset lookup err:', e);
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Password update failed.' };
     }
-
-    if (!user) {
-      const localUsers = JSON.parse(localStorage.getItem('everytango_db_users') || '[]');
-      user = localUsers.find((u: any) => u.email?.toLowerCase() === q || u.username?.toLowerCase() === q);
-    }
-
-    if (!user && (q === 'parkinky' || q === 'parkinky@gmail.com')) {
-      user = {
-        id: 'admin_parkinky',
-        username: 'parkinky',
-        email: 'parkinky@gmail.com',
-        role: 'ADMIN',
-        security_questions: [
-          { question_number: 1, question_text: 'What was your first pet’s name?', answer_hash: 'tango' },
-          { question_number: 2, question_text: 'In what city was your first tango festival?', answer_hash: 'seoul' },
-          { question_number: 3, question_text: 'What is your favorite tango orchestra?', answer_hash: 'di sarli' }
-        ]
-      };
-    }
-
-    if (!user || !user.security_questions || user.security_questions.length === 0) {
-      return { success: false, error: '보안 질문이 등록되지 않은 계정입니다.' };
-    }
-
-    const targetQ = user.security_questions.find((sq: any) => sq.question_number === questionNumber);
-    if (!targetQ) {
-      return { success: false, error: `보안 질문 #${questionNumber}번이 존재하지 않습니다.` };
-    }
-
-    const expected = (targetQ.answer_hash || '').trim().toLowerCase();
-    const cleanProvided = (answerPlain || '').trim().toLowerCase();
-    const hashedProvided = await hashAnswer(cleanProvided);
-
-    if (expected !== cleanProvided && expected !== hashedProvided) {
-      return { success: false, error: '보안 답변이 일치하지 않습니다.' };
-    }
-
-    // Update password in Firestore
-    if (userDocId) {
-      try {
-        await setDoc(doc(db, 'users', userDocId), { ...user, password_hash: newPasswordPlain }, { merge: true });
-      } catch (e) {
-        console.warn('Could not update password in firestore:', e);
-      }
-    }
-
-    // Update in local cache
-    const localUsers = JSON.parse(localStorage.getItem('everytango_db_users') || '[]');
-    const idx = localUsers.findIndex((u: any) => u.id === user.id || u.username?.toLowerCase() === q || u.email?.toLowerCase() === q);
-    if (idx >= 0) {
-      localUsers[idx].password_hash = newPasswordPlain;
-      localStorage.setItem('everytango_db_users', JSON.stringify(localUsers));
-    } else {
-      localUsers.push({ ...user, password_hash: newPasswordPlain });
-      localStorage.setItem('everytango_db_users', JSON.stringify(localUsers));
-    }
-
-    // If this was the logged-in user, update state
-    if (userProfile && (userProfile.id === user.id || userProfile.username?.toLowerCase() === q)) {
-      const updated = { ...userProfile, password_hash: newPasswordPlain };
-      setUserProfile(updated);
-      localStorage.setItem('everytango_custom_user', JSON.stringify(updated));
-    }
-
-    return { success: true };
   };
 
   const verifyAnswersAndResetPw = async (
-    usernameOrEmail: string, 
-    answers: string[], 
-    newPasswordHash: string
+    usernameOrEmail: string,
+    answers: string[],
+    newPassword: string
   ): Promise<{ success: boolean; error?: string }> => {
-    const q = usernameOrEmail.trim().toLowerCase();
-    let userDocId: string | null = null;
-    let user: any = null;
-
     try {
-      const usersRef = collection(db, 'users');
-      const snap1 = await getDocs(query(usersRef, where('email', '==', q)));
-      if (!snap1.empty) {
-        userDocId = snap1.docs[0].id;
-        user = snap1.docs[0].data();
-      } else {
-        const snap2 = await getDocs(query(usersRef, where('username', '==', q)));
-        if (!snap2.empty) {
-          userDocId = snap2.docs[0].id;
-          user = snap2.docs[0].data();
-        }
+      const res = await fetch('/api/auth/reset-password-with-answers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ usernameOrEmail, answers, newPassword }),
+      });
+      const data = await safeJson(res);
+      if (!res.ok || !data.success) {
+        return { success: false, error: data.error };
       }
-    } catch (e) {
-      console.warn('Firestore verify answers lookup err:', e);
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message };
     }
-
-    if (!user) {
-      const localUsers = JSON.parse(localStorage.getItem('everytango_db_users') || '[]');
-      user = localUsers.find((u: any) => u.email.toLowerCase() === q || u.username.toLowerCase() === q);
-    }
-
-    if (!user || !user.security_questions || user.security_questions.length < 3) {
-      return { success: false, error: 'User does not have 3 security questions on file.' };
-    }
-
-    // Verify all 3 answers match
-    for (let i = 0; i < 3; i++) {
-      const expected = (user.security_questions[i]?.answer_hash || '').toLowerCase();
-      const provided = (answers[i] || '').trim().toLowerCase();
-      if (expected !== provided) {
-        return { success: false, error: `Answer to question #${i + 1} does not match our records.` };
-      }
-    }
-
-    // Update password
-    if (userDocId) {
-      try {
-        await setDoc(doc(db, 'users', userDocId), { ...user, password_hash: newPasswordHash }, { merge: true });
-      } catch (e) {
-        console.warn('Could not update password in firestore:', e);
-      }
-    }
-
-    // Update local cache
-    const localUsers = JSON.parse(localStorage.getItem('everytango_db_users') || '[]');
-    const idx = localUsers.findIndex((u: any) => u.id === user.id);
-    if (idx >= 0) {
-      localUsers[idx].password_hash = newPasswordHash;
-      localStorage.setItem('everytango_db_users', JSON.stringify(localUsers));
-    }
-
-    return { success: true };
   };
 
   const getAllUsers = async (): Promise<UserProfile[]> => {
-    const userList: UserProfile[] = [];
-    const seenIds = new Set<string>();
-
-    // 1. Fetch from Firestore
     try {
-      const snap = await getDocs(collection(db, 'users'));
-      snap.forEach((d) => {
-        const data = d.data() as UserProfile;
-        if (data && data.id && !seenIds.has(data.id)) {
-          seenIds.add(data.id);
-          userList.push(data);
-        }
-      });
-    } catch (e) {
-      console.warn('Could not read users from Firestore:', e);
+      const res = await authedFetch('/api/admin/users');
+      const data = await safeJson(res);
+      return res.ok && data.success ? data.users : [];
+    } catch (err) {
+      console.warn('Could not load users:', err);
+      return [];
     }
-
-    // 2. Fetch from Local Storage
-    try {
-      const localUsers = JSON.parse(localStorage.getItem('everytango_db_users') || '[]');
-      for (const u of localUsers) {
-        if (u && u.id && !seenIds.has(u.id)) {
-          seenIds.add(u.id);
-          userList.push(u);
-        }
-      }
-    } catch (e) {
-      console.warn('Could not read local users:', e);
-    }
-
-    // 3. Ensure default seed users including parkinky (ADMIN) are present
-    const defaultSeedUsers: UserProfile[] = [
-      {
-        id: 'admin_parkinky',
-        username: 'parkinky',
-        email: 'parkinky@gmail.com',
-        country_code: 'KR',
-        city: 'Seoul',
-        phone: '+82 10-1234-5678',
-        role: 'ADMIN',
-        created_at: '2026-01-01T09:00:00Z',
-        last_login: new Date().toISOString(),
-        security_questions: [
-          { question_number: 1, question_text: 'What was your first pet’s name?', answer_hash: 'tango' },
-          { question_number: 2, question_text: 'In what city was your first tango festival?', answer_hash: 'seoul' },
-          { question_number: 3, question_text: 'What is your favorite tango orchestra?', answer_hash: 'di sarli' }
-        ]
-      },
-      {
-        id: 'usr_carlos_m',
-        username: 'carlos_milonguero',
-        email: 'carlos.m@tango-ba.ar',
-        country_code: 'AR',
-        city: 'Buenos Aires',
-        phone: '+54 11 4321-9876',
-        role: 'USER',
-        created_at: '2026-02-14T14:30:00Z',
-        last_login: '2026-09-02T18:20:00Z',
-      },
-      {
-        id: 'usr_maria_t',
-        username: 'maria_tango',
-        email: 'maria.dance@tangomadrid.es',
-        country_code: 'ES',
-        city: 'Madrid',
-        phone: '+34 91 555 4321',
-        role: 'USER',
-        created_at: '2026-03-10T11:15:00Z',
-        last_login: '2026-09-04T09:40:00Z',
-      },
-      {
-        id: 'usr_hannah_b',
-        username: 'hannah_berlin',
-        email: 'hannah@berlintango.de',
-        country_code: 'DE',
-        city: 'Berlin',
-        phone: '+49 30 1234567',
-        role: 'USER',
-        created_at: '2026-04-05T16:45:00Z',
-        last_login: '2026-09-03T12:00:00Z',
-      },
-      {
-        id: 'usr_kenji_t',
-        username: 'kenji_tokyo',
-        email: 'kenji@tangotokyo.jp',
-        country_code: 'JP',
-        city: 'Tokyo',
-        phone: '+81 3 3456 7890',
-        role: 'USER',
-        created_at: '2026-05-20T08:10:00Z',
-        last_login: '2026-09-05T03:15:00Z',
-      }
-    ];
-
-    for (const seed of defaultSeedUsers) {
-      if (!seenIds.has(seed.id) && !seenIds.has(seed.username)) {
-        seenIds.add(seed.id);
-        userList.push(seed);
-      }
-    }
-
-    return userList;
   };
 
   const updateUserRole = async (userId: string, newRole: UserRole) => {
     try {
-      await updateDoc(doc(db, 'users', userId), { role: newRole });
-    } catch (e) {
-      console.warn('Update remote user role error:', e);
-    }
-    const localUsers = JSON.parse(localStorage.getItem('everytango_db_users') || '[]');
-    const idx = localUsers.findIndex((u: any) => u.id === userId);
-    if (idx >= 0) {
-      localUsers[idx].role = newRole;
-      localStorage.setItem('everytango_db_users', JSON.stringify(localUsers));
-    }
-    if (userProfile && userProfile.id === userId) {
-      const updated = { ...userProfile, role: newRole };
-      setUserProfile(updated);
-      localStorage.setItem('everytango_custom_user', JSON.stringify(updated));
+      await authedFetch(`/api/admin/users/${encodeURIComponent(userId)}/role`, {
+        method: 'PATCH',
+        body: JSON.stringify({ role: newRole }),
+      });
+      if (userProfile && userProfile.id === userId) {
+        setUserProfile({ ...userProfile, role: newRole });
+      }
+    } catch (err) {
+      console.warn('Update user role error:', err);
     }
   };
 
   const updateUserProfile = async (userId: string, updates: Partial<UserProfile>): Promise<{ success: boolean; error?: string }> => {
     try {
-      // 1. Update remote Firestore document
-      try {
-        const userRef = doc(db, 'users', userId);
-        await setDoc(userRef, updates, { merge: true });
-      } catch (remoteErr) {
-        console.warn('Update remote user in firestore failed or offline, updating locally:', remoteErr);
+      const res = await authedFetch(`/api/admin/users/${encodeURIComponent(userId)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(updates),
+      });
+      const data = await safeJson(res);
+      if (!res.ok || !data.success) {
+        return { success: false, error: data.error || 'Failed to update user profile' };
       }
-
-      // 2. Update local mock/cache storage
-      const localUsers: UserProfile[] = JSON.parse(localStorage.getItem('everytango_db_users') || '[]');
-      const idx = localUsers.findIndex((u) => u.id === userId);
-      if (idx >= 0) {
-        localUsers[idx] = { ...localUsers[idx], ...updates };
-        localStorage.setItem('everytango_db_users', JSON.stringify(localUsers));
-      }
-
-      // 3. If currently logged-in user is updated, sync active state
       if (userProfile && userProfile.id === userId) {
-        const updated = { ...userProfile, ...updates };
-        setUserProfile(updated);
-        localStorage.setItem('everytango_custom_user', JSON.stringify(updated));
+        setUserProfile({ ...userProfile, ...updates });
       }
-
       return { success: true };
     } catch (err: any) {
       return { success: false, error: err.message || 'Failed to update user profile' };
@@ -749,30 +356,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (!cleanPassword) {
         return { success: false, error: '새 비밀번호를 입력해주세요.' };
       }
-
-      // 1. Update remote Firestore document
-      try {
-        const userRef = doc(db, 'users', userId);
-        await setDoc(userRef, { password_hash: cleanPassword }, { merge: true });
-      } catch (remoteErr) {
-        console.warn('Reset remote user password in firestore failed or offline, updating locally:', remoteErr);
+      const res = await authedFetch(`/api/admin/users/${encodeURIComponent(userId)}/reset-password`, {
+        method: 'POST',
+        body: JSON.stringify({ newPassword: cleanPassword }),
+      });
+      const data = await safeJson(res);
+      if (!res.ok || !data.success) {
+        return { success: false, error: data.error || '비밀번호 초기화에 실패했습니다.' };
       }
-
-      // 2. Update local mock/cache storage
-      const localUsers: UserProfile[] = JSON.parse(localStorage.getItem('everytango_db_users') || '[]');
-      const idx = localUsers.findIndex((u) => u.id === userId);
-      if (idx >= 0) {
-        localUsers[idx].password_hash = cleanPassword;
-        localStorage.setItem('everytango_db_users', JSON.stringify(localUsers));
-      }
-
-      // 3. If currently logged-in user is updated, sync active state
-      if (userProfile && userProfile.id === userId) {
-        const updated = { ...userProfile, password_hash: cleanPassword };
-        setUserProfile(updated);
-        localStorage.setItem('everytango_custom_user', JSON.stringify(updated));
-      }
-
       return { success: true };
     } catch (err: any) {
       return { success: false, error: err.message || '비밀번호 초기화에 실패했습니다.' };
@@ -781,13 +372,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const deleteUser = async (userId: string) => {
     try {
-      await deleteDoc(doc(db, 'users', userId));
-    } catch (e) {
-      console.warn('Delete remote user error:', e);
+      await authedFetch(`/api/admin/users/${encodeURIComponent(userId)}`, { method: 'DELETE' });
+    } catch (err) {
+      console.warn('Delete user error:', err);
     }
-    const localUsers = JSON.parse(localStorage.getItem('everytango_db_users') || '[]');
-    const filtered = localUsers.filter((u: any) => u.id !== userId);
-    localStorage.setItem('everytango_db_users', JSON.stringify(filtered));
   };
 
   return (

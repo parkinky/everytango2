@@ -1,11 +1,40 @@
 import express from 'express';
 import path from 'path';
+import crypto from 'crypto';
+import { promises as dns } from 'dns';
+import net from 'net';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
+import admin from 'firebase-admin';
+import bcrypt from 'bcryptjs';
+import { Agent as UndiciAgent, fetch as undiciFetch, type Response as UndiciResponse } from 'undici';
 import firebaseAppletConfig from './firebase-applet-config.json';
 
 dotenv.config();
+
+// --- Firebase Admin SDK ---------------------------------------------------
+// Used for every trusted, server-side read/write of the `users` collection
+// (see firestore.rules: client access to that collection is denied - it
+// only ever holds password hashes, security-question hashes and role
+// flags). The Admin SDK authenticates via Application Default Credentials:
+// on Cloud Run this "just works" using the service account attached to the
+// service, no key file needed; for local development, run
+// `gcloud auth application-default login` once, or point
+// GOOGLE_APPLICATION_CREDENTIALS at a service account key file.
+try {
+  admin.initializeApp({
+    credential: admin.credential.applicationDefault(),
+    projectId: firebaseAppletConfig.projectId,
+  });
+} catch (e) {
+  console.warn(
+    '[firebase-admin] Failed to initialize with Application Default Credentials. ' +
+      '/api/auth/* and /api/admin/* routes will fail until GOOGLE_APPLICATION_CREDENTIALS ' +
+      'is configured (locally) or this runs on a GCP service with the right IAM role (Cloud Run):',
+    (e as Error).message
+  );
+}
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -37,44 +66,119 @@ function getAIClient() {
   return aiClient;
 }
 
-// --- Admin auth guard for the paid Gemini endpoint --------------------
+// --- Admin auth guard --------------------------------------------------
 // Cost/abuse guard: the client used to prove it was the admin by sending
-// a plain `userAdmin: 'parkinky'` string in the request body, which is
-// trivial to forge - anyone who found this endpoint in the JS bundle
-// could call the paid Gemini API for free. Now we require a real Firebase
-// ID token (verified via the Identity Toolkit REST API, no firebase-admin
-// dependency needed) and check the token's email against ADMIN_EMAIL.
+// a plain `userAdmin: 'parkinky'` string in the request body (or, for the
+// crawler/email endpoints below, nothing at all), which is trivial to
+// forge - anyone who found these endpoints in the JS bundle could call the
+// paid Gemini API for free, use this server as an open URL-fetching proxy,
+// or read/write any user record. Every admin-only route now requires a
+// real Firebase ID token (verified server-side via the Admin SDK, which
+// cannot be spoofed by the client) whose Firestore user record - or whose
+// email, as a bootstrap fallback for the very first admin - has role
+// ADMIN. See requireAdmin below.
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'parkinky@gmail.com';
 
-async function verifyAdminAuth(req: express.Request): Promise<{ ok: boolean; status: number; error?: string }> {
+async function verifyAdminAuth(req: express.Request): Promise<{ ok: boolean; status: number; error?: string; uid?: string }> {
   const authHeader = (req.headers['authorization'] as string) || '';
   const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
   if (!idToken) {
     return { ok: false, status: 401, error: 'Missing admin credentials.' };
   }
   try {
-    const apiKey = (firebaseAppletConfig as any).apiKey;
-    const lookupRes = await fetch(
-      `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ idToken }),
-      }
-    );
-    if (!lookupRes.ok) {
-      return { ok: false, status: 401, error: 'Invalid or expired credentials.' };
-    }
-    const data: any = await lookupRes.json();
-    const email = data?.users?.[0]?.email;
-    if (!email || email.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
+    const decoded = await admin.auth().verifyIdToken(idToken);
+    const snap = await admin.firestore().collection('users').doc(decoded.uid).get();
+    const role = snap.exists ? (snap.data() as any)?.role : null;
+    const email = (decoded.email || '').toLowerCase();
+    // The ADMIN_EMAIL bootstrap fallback only ever trusts a *verified*
+    // email claim. Firebase sets email_verified itself and it cannot be set
+    // by the client - Google sign-in gets true automatically, while the
+    // custom username/password registration endpoint below always creates
+    // its Firebase Auth user with emailVerified: false. Without this check,
+    // anyone could register a custom account using ADMIN_EMAIL as the
+    // "email" field (nothing about that endpoint proves they own that
+    // inbox) and this fallback would treat them as admin on every request
+    // forever, regardless of the Firestore `role` field.
+    const isAdmin = role === 'ADMIN' || (!!decoded.email_verified && email === ADMIN_EMAIL.toLowerCase());
+    if (!isAdmin) {
       return { ok: false, status: 403, error: 'Not authorized as site admin.' };
     }
-    return { ok: true, status: 200 };
+    return { ok: true, status: 200, uid: decoded.uid };
   } catch (e) {
     console.error('Admin auth verification failed');
     return { ok: false, status: 401, error: 'Could not verify admin credentials.' };
   }
+}
+
+// Express middleware form of verifyAdminAuth, for routes that should
+// short-circuit non-admin callers outright rather than checking inline.
+const requireAdmin: express.RequestHandler = async (req, res, next) => {
+  const check = await verifyAdminAuth(req);
+  if (!check.ok) {
+    res.status(check.status).json({ success: false, error: check.error });
+    return;
+  }
+  next();
+};
+
+// Any authenticated Firebase user (not necessarily an admin) - used by
+// /api/auth/me, which every signed-in user (custom login or Google) calls
+// to load their own profile now that the client can no longer read
+// Firestore's `users` collection directly.
+const requireAuth: express.RequestHandler = async (req, res, next) => {
+  const authHeader = (req.headers['authorization'] as string) || '';
+  const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  if (!idToken) {
+    res.status(401).json({ success: false, error: 'Missing credentials.' });
+    return;
+  }
+  try {
+    const decoded = await admin.auth().verifyIdToken(idToken);
+    (req as any).authUid = decoded.uid;
+    (req as any).authEmail = decoded.email || '';
+    (req as any).authEmailVerified = !!decoded.email_verified;
+    next();
+  } catch {
+    res.status(401).json({ success: false, error: 'Invalid or expired session.' });
+  }
+};
+
+// --- User data helpers ---------------------------------------------------
+// All of these use the Admin SDK, which bypasses Firestore security rules -
+// that is intentional and is exactly why the `users` collection's rules can
+// deny all direct client access (see firestore.rules). Never expose these
+// helpers' raw output to the client without sanitizeProfile().
+
+async function findUserByField(field: 'email' | 'username', value: string): Promise<any | null> {
+  const clean = (value || '').trim().toLowerCase();
+  if (!clean) return null;
+  const snap = await admin.firestore().collection('users').where(field, '==', clean).limit(1).get();
+  if (snap.empty) return null;
+  return { id: snap.docs[0].id, ...snap.docs[0].data() };
+}
+
+async function findUserByIdentifier(usernameOrEmail: string): Promise<any | null> {
+  return (await findUserByField('email', usernameOrEmail)) || (await findUserByField('username', usernameOrEmail));
+}
+
+function sanitizeProfile(u: any): any {
+  if (!u) return u;
+  const { password_hash, security_questions, ...rest } = u;
+  const questions = Array.isArray(security_questions)
+    ? security_questions.map((q: any) => ({ question_number: q.question_number, question_text: q.question_text }))
+    : undefined;
+  return { ...rest, ...(questions ? { security_questions: questions } : {}) };
+}
+
+// Same normalization + SHA-256 the client used to do for security-question
+// answers (trim + lowercase, then hash) - kept identical so existing hashes
+// already stored in Firestore keep working. The difference is this now only
+// ever runs on the server, so the raw answer is never exposed to the client
+// as a hash it could replay, and the hardcoded admin answers that used to
+// live in the client source are gone entirely.
+function hashSecurityAnswer(text: string): string {
+  const normalized = (text || '').trim().toLowerCase();
+  return crypto.createHash('sha256').update(normalized).digest('hex');
 }
 
 // Very small in-memory rate limiter (per-process, resets on redeploy).
@@ -93,9 +197,553 @@ function isRateLimited(ip: string, limit = 20, windowMs = 60_000): boolean {
 }
 // ------------------------------------------------------------------------
 
+// --- SSRF guard for server-side URL fetches -------------------------------
+// /api/crawler/validate-urls and /api/crawler/extract-site-events make this
+// server fetch whatever URL is passed in, to check event listings on
+// third-party sites. Without this check, a caller could point that at an
+// internal address instead (a private IP, or a cloud metadata endpoint like
+// 169.254.169.254, which on Cloud Run/GCE can hand out real credentials) and
+// use this server as a proxy into infrastructure that is never supposed to
+// be reachable from the public internet. These endpoints also now require
+// an authenticated admin (see requireAdmin above); this check is a second,
+// independent layer in case that ever regresses.
+function isPrivateOrReservedIp(ip: string): boolean {
+  if (net.isIP(ip) === 4) {
+    const [a, b] = ip.split('.').map(Number);
+    if (a === 10) return true; // 10.0.0.0/8
+    if (a === 127) return true; // loopback
+    if (a === 169 && b === 254) return true; // link-local incl. cloud metadata
+    if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
+    if (a === 192 && b === 168) return true; // 192.168.0.0/16
+    if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 (CGNAT)
+    if (a === 0) return true;
+    return false;
+  }
+  if (net.isIP(ip) === 6) {
+    const lower = ip.toLowerCase();
+    if (lower === '::1') return true; // loopback
+    if (lower.startsWith('fe80:')) return true; // link-local
+    if (lower.startsWith('fc') || lower.startsWith('fd')) return true; // unique local
+    if (lower.startsWith('::ffff:')) {
+      // IPv4-mapped IPv6 address - check the embedded IPv4 part too.
+      return isPrivateOrReservedIp(lower.substring(lower.lastIndexOf(':') + 1));
+    }
+    return false;
+  }
+  return true; // couldn't parse - treat as unsafe
+}
+
+// Resolves `hostname` and returns the IP addresses it's safe to connect to,
+// or null if it can't be resolved or any resolved address is private/
+// reserved (fail closed - if even one address in the answer is unsafe, the
+// whole hostname is rejected rather than gambling on which one gets used).
+async function resolveSafeIps(hostname: string): Promise<string[] | null> {
+  if (net.isIP(hostname)) {
+    return isPrivateOrReservedIp(hostname) ? null : [hostname];
+  }
+  try {
+    const records = await dns.lookup(hostname, { all: true });
+    if (records.length === 0) return null;
+    if (records.some((r) => isPrivateOrReservedIp(r.address))) return null;
+    return records.map((r) => r.address);
+  } catch {
+    return null; // unresolvable host - fail closed
+  }
+}
+
+async function isSafeExternalUrl(rawUrl: string): Promise<boolean> {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) return false;
+  const hostname = parsed.hostname.toLowerCase();
+  if (hostname === 'localhost' || hostname === 'metadata.google.internal') return false;
+  return (await resolveSafeIps(hostname)) !== null;
+}
+
+// A dns.lookup-shaped function (same signature Node's `lookup` socket option
+// takes) that ignores whatever the system resolver would say and always
+// hands back the specific, already-validated IPs it was built with.
+function pinnedLookup(ips: string[]) {
+  return (_hostname: string, options: any, callback: (err: Error | null, address: any, family?: number) => void) => {
+    if (options && options.all) {
+      callback(null, ips.map((ip) => ({ address: ip, family: net.isIP(ip) })));
+    } else {
+      callback(null, ips[0], net.isIP(ips[0]));
+    }
+  };
+}
+
+// fetch() with `redirect: 'follow'` (or the default) will transparently
+// follow a 3xx response to ANY new location - including one that points at
+// an internal/private address or the cloud metadata endpoint - without ever
+// re-running isSafeExternalUrl on the redirect target. A crawled site could
+// exploit that with a single 302 to bypass the check above entirely. This
+// wrapper re-validates every hop before following it, so redirects can only
+// ever lead to another already-approved public address.
+//
+// It also closes a second gap: isSafeExternalUrl's DNS lookup and the
+// connection fetch() actually opens are two separate resolutions. A domain
+// under attacker control with a very short TTL ("DNS rebinding") could
+// answer with a public IP for the check and a private/internal one moments
+// later for the real connection - the two would never be compared against
+// each other otherwise. To close that, each hop resolves the hostname once,
+// validates every address it got back, and then pins the actual TCP
+// connection to exactly those addresses via a custom Agent, so whatever the
+// resolver says a few milliseconds later can no longer change where the
+// request actually goes.
+async function safeFetch(url: string, options: RequestInit = {}, maxRedirects = 5): Promise<UndiciResponse> {
+  let currentUrl = url;
+  for (let i = 0; i <= maxRedirects; i++) {
+    let parsed: URL;
+    try {
+      parsed = new URL(currentUrl);
+    } catch {
+      throw new Error(`Invalid URL: ${currentUrl}`);
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      throw new Error(`Refusing non-http(s) URL: ${currentUrl}`);
+    }
+    const hostname = parsed.hostname.toLowerCase();
+    if (hostname === 'localhost' || hostname === 'metadata.google.internal') {
+      throw new Error(`Refusing unsafe URL: ${currentUrl}`);
+    }
+    const safeIps = await resolveSafeIps(hostname);
+    if (!safeIps) {
+      throw new Error(`Refusing unsafe or unresolvable URL: ${currentUrl}`);
+    }
+    // Small, ephemeral, per-hop dispatcher - not explicitly closed since
+    // that could cut off the response body before the caller reads it, but
+    // undici's own idle-socket timeout (a few seconds) cleans it up shortly
+    // after each low-volume, admin-only crawl request completes.
+    const dispatcher = new UndiciAgent({ connect: { lookup: pinnedLookup(safeIps) as any } });
+    // Node's global fetch() is backed by its OWN internal undici build;
+    // handing it a dispatcher created from the separately-installed undici
+    // package (a different copy/version) throws (mismatched internal
+    // handler shape). Using undici's own fetch alongside its own Agent
+    // keeps both from the same package, avoiding that mismatch.
+    const res = await undiciFetch(currentUrl, { ...options, redirect: 'manual', dispatcher } as any);
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get('location');
+      if (!location) return res;
+      currentUrl = new URL(location, currentUrl).toString();
+      continue;
+    }
+    return res;
+  }
+  throw new Error(`Too many redirects fetching: ${url}`);
+}
+// ------------------------------------------------------------------------
+
 // Health check endpoint
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// =========================================================================
+// AUTH & USER MANAGEMENT
+// -------------------------------------------------------------------------
+// Everything below is the trusted boundary for the `users` collection.
+// Firestore rules deny all direct client read/write on that collection, so
+// this server (via the Admin SDK) is the only thing that can touch it. That
+// is what lets us enforce: real password hashing (bcrypt, not the plaintext
+// that used to be stored), security-question verification without ever
+// handing the client a replayable hash, and role changes that only a
+// verified admin can make.
+//
+// Successful login/register mints a Firebase custom token
+// (admin.auth().createCustomToken) which the client exchanges for a real
+// Firebase Auth session via signInWithCustomToken. That is what lets
+// "custom" logins and Google logins share one identity system, so Firestore
+// rules (and requireAdmin/requireAuth here) can rely on request.auth /
+// verifyIdToken for both.
+// =========================================================================
+
+// Load-or-create the caller's own profile. Called once per sign-in by the
+// client (both Google and custom-token sessions) since the client can no
+// longer read its own Firestore user document directly.
+app.get('/api/auth/me', requireAuth, async (req, res) => {
+  try {
+    const uid = (req as any).authUid as string;
+    const email = ((req as any).authEmail as string) || '';
+    const emailVerified = !!(req as any).authEmailVerified;
+    const ref = admin.firestore().collection('users').doc(uid);
+    const snap = await ref.get();
+    if (snap.exists) {
+      const nowIso = new Date().toISOString();
+      ref.update({ last_login: nowIso }).catch(() => {});
+      res.json({ success: true, profile: sanitizeProfile({ id: uid, ...snap.data(), last_login: nowIso }) });
+      return;
+    }
+    // First time we see this Firebase Auth identity (e.g. a fresh Google
+    // sign-in, which never goes through /api/auth/register) - create a
+    // default profile for it, same defaults the old client code used.
+    //
+    // The ADMIN_EMAIL auto-grant below only fires when Firebase itself has
+    // verified the email (true automatically for Google sign-in; see the
+    // matching comment on verifyAdminAuth for why this must not trust an
+    // unverified email claim).
+    const nowIso = new Date().toISOString();
+    const newProfile = {
+      id: uid,
+      username: (email.split('@')[0] || 'TangoDancer').trim() || 'TangoDancer',
+      email,
+      country_code: 'US',
+      city: 'Global',
+      phone: '',
+      role: emailVerified && email.toLowerCase() === ADMIN_EMAIL.toLowerCase() ? 'ADMIN' : 'USER',
+      created_at: nowIso,
+      last_login: nowIso,
+    };
+    await ref.set(newProfile);
+    res.json({ success: true, profile: sanitizeProfile(newProfile) });
+  } catch (e: any) {
+    console.error('auth/me error:', e);
+    res.status(500).json({ success: false, error: e.message || 'Failed to load profile' });
+  }
+});
+
+app.post('/api/auth/check-username', async (req, res) => {
+  try {
+    const username = String(req.body?.username || '').trim().toLowerCase();
+    if (!username) {
+      res.json({ success: true, exists: false });
+      return;
+    }
+    if (username === 'parkinky' || username === 'admin') {
+      res.json({ success: true, exists: true });
+      return;
+    }
+    const found = await findUserByField('username', username);
+    res.json({ success: true, exists: !!found });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || 'Lookup failed' });
+  }
+});
+
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    if (isRateLimited('register_' + (req.ip || 'unknown'), 10, 60_000)) {
+      res.status(429).json({ success: false, error: 'Too many requests. Please try again shortly.' });
+      return;
+    }
+    const { username, email, password, first_name, last_name, country_code, state, city, phone, security_questions } = req.body || {};
+    const cleanUsername = String(username || '').trim();
+    const cleanEmail = String(email || '').trim().toLowerCase();
+    const cleanPassword = String(password || '');
+
+    if (!cleanUsername || !cleanEmail || cleanPassword.length < 4) {
+      res.status(400).json({ success: false, error: 'Username, email and a password of at least 4 characters are required.' });
+      return;
+    }
+    if (!Array.isArray(security_questions) || security_questions.length !== 3 || security_questions.some((q: any) => !q || !String(q.answer || '').trim())) {
+      res.status(400).json({ success: false, error: 'All 3 security questions must be answered for account recovery.' });
+      return;
+    }
+
+    const lowerUsername = cleanUsername.toLowerCase();
+    if (
+      lowerUsername === 'parkinky' ||
+      lowerUsername === 'admin' ||
+      (await findUserByField('username', lowerUsername)) ||
+      (await findUserByField('email', cleanEmail))
+    ) {
+      res.status(409).json({ success: false, error: 'This username or email is already registered.' });
+      return;
+    }
+
+    const passwordHash = await bcrypt.hash(cleanPassword, 10);
+    const hashedQuestions = security_questions.slice(0, 3).map((q: any, i: number) => ({
+      question_number: (i + 1) as 1 | 2 | 3,
+      question_text: String(q.question_text || '').trim(),
+      answer_hash: hashSecurityAnswer(String(q.answer || '')),
+    }));
+
+    const fbUser = await admin.auth().createUser({ email: cleanEmail, emailVerified: false });
+    const nowIso = new Date().toISOString();
+    // Deliberately never auto-grant ADMIN here, even if cleanEmail matches
+    // ADMIN_EMAIL: this endpoint is unauthenticated and takes the email as a
+    // plain string with no proof of ownership, so anyone who knows the
+    // admin's address (it's the literal default value in .env.example)
+    // could otherwise register with it first and permanently claim ADMIN.
+    // The real admin bootstraps by signing in with Google using that same
+    // address instead (see /api/auth/me), which Firebase itself verifies.
+    const role = 'USER';
+    const profile = {
+      id: fbUser.uid,
+      username: cleanUsername,
+      email: cleanEmail,
+      first_name: String(first_name || '').trim(),
+      last_name: String(last_name || '').trim(),
+      country_code: country_code || 'US',
+      state: String(state || '').trim(),
+      city: String(city || '').trim(),
+      phone: String(phone || '').trim(),
+      role,
+      created_at: nowIso,
+      last_login: nowIso,
+      security_questions: hashedQuestions,
+      password_hash: passwordHash,
+    };
+    await admin.firestore().collection('users').doc(fbUser.uid).set(profile);
+    const token = await admin.auth().createCustomToken(fbUser.uid);
+    res.json({ success: true, token, profile: sanitizeProfile(profile) });
+  } catch (e: any) {
+    console.error('Register error:', e);
+    res.status(500).json({ success: false, error: e.message || 'Registration failed' });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    if (isRateLimited('login_' + (req.ip || 'unknown'), 15, 60_000)) {
+      res.status(429).json({ success: false, error: 'Too many login attempts. Please try again shortly.' });
+      return;
+    }
+    const identifier = String(req.body?.usernameOrEmail || '').trim();
+    const password = String(req.body?.password || '');
+    if (!identifier || !password) {
+      res.status(400).json({ success: false, error: 'Username/email and password are required.' });
+      return;
+    }
+    const user = await findUserByIdentifier(identifier);
+    if (!user || !user.password_hash) {
+      res.status(401).json({ success: false, error: 'Invalid username/email or password.' });
+      return;
+    }
+    const isBcryptHash = /^\$2[aby]\$/.test(user.password_hash);
+    let passwordOk = false;
+    if (isBcryptHash) {
+      passwordOk = await bcrypt.compare(password, user.password_hash);
+    } else {
+      // One-time transparent upgrade path: accounts created before this fix
+      // had their password stored in plaintext in the `password_hash` field.
+      // If it still matches exactly, accept it this one last time and
+      // immediately replace it with a real bcrypt hash so the plaintext
+      // value never exists again after this login.
+      passwordOk = user.password_hash === password;
+      if (passwordOk) {
+        const upgradedHash = await bcrypt.hash(password, 10);
+        await admin.firestore().collection('users').doc(user.id).update({ password_hash: upgradedHash }).catch(() => {});
+      }
+    }
+    if (!passwordOk) {
+      res.status(401).json({ success: false, error: 'Invalid username/email or password.' });
+      return;
+    }
+    admin.firestore().collection('users').doc(user.id).update({ last_login: new Date().toISOString() }).catch(() => {});
+    const token = await admin.auth().createCustomToken(user.id);
+    res.json({ success: true, token, profile: sanitizeProfile(user) });
+  } catch (e: any) {
+    console.error('Login error:', e);
+    res.status(500).json({ success: false, error: e.message || 'Login failed' });
+  }
+});
+
+app.post('/api/auth/find-id', async (req, res) => {
+  try {
+    if (isRateLimited('findid_' + (req.ip || 'unknown'), 10, 60_000)) {
+      res.status(429).json({ success: false, error: 'Too many requests. Please try again shortly.' });
+      return;
+    }
+    const email = String(req.body?.email || '').trim();
+    const phone = String(req.body?.phone || '').trim().replace(/[^0-9+]/g, '');
+    const user = await findUserByField('email', email);
+    if (user) {
+      const uPhone = (user.phone || '').replace(/[^0-9+]/g, '');
+      if (!phone || uPhone === phone) {
+        res.json({ success: true, found: true, username: user.username });
+        return;
+      }
+    }
+    res.json({ success: true, found: false, error: 'No account matched this email and phone number combination.' });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || 'Lookup failed' });
+  }
+});
+
+app.post('/api/auth/security-questions', async (req, res) => {
+  try {
+    if (isRateLimited('secq_' + (req.ip || 'unknown'), 15, 60_000)) {
+      res.status(429).json({ success: false, error: 'Too many requests. Please try again shortly.' });
+      return;
+    }
+    const identifier = String(req.body?.usernameOrEmail || '').trim();
+    const user = await findUserByIdentifier(identifier);
+    if (!user || !Array.isArray(user.security_questions) || user.security_questions.length === 0) {
+      res.json({ success: true, found: false, error: 'Account not found or no security questions configured for this user.' });
+      return;
+    }
+    const questions = user.security_questions.map((q: any) => ({ number: q.question_number, text: q.question_text }));
+    res.json({ success: true, found: true, questions });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || 'Could not retrieve security questions.' });
+  }
+});
+
+app.post('/api/auth/verify-answer', async (req, res) => {
+  try {
+    if (isRateLimited('verify_' + (req.ip || 'unknown'), 8, 60_000)) {
+      res.status(429).json({ success: false, error: '너무 많은 시도가 있었습니다. 잠시 후 다시 시도해주세요.' });
+      return;
+    }
+    const identifier = String(req.body?.usernameOrEmail || '').trim();
+    const questionNumber = Number(req.body?.questionNumber);
+    const answer = String(req.body?.answer || '');
+    const user = await findUserByIdentifier(identifier);
+    const q = user?.security_questions?.find((sq: any) => sq.question_number === questionNumber);
+    if (!q) {
+      res.status(400).json({ success: false, error: '보안 질문이 등록되지 않은 사용자입니다.' });
+      return;
+    }
+    if (hashSecurityAnswer(answer) !== q.answer_hash) {
+      res.status(401).json({ success: false, error: '보안 답변이 일치하지 않습니다. 다시 입력하시거나 다른 질문을 선택해 주세요.' });
+      return;
+    }
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || '보안 답변 확인에 실패했습니다.' });
+  }
+});
+
+app.post('/api/auth/reset-password-with-answer', async (req, res) => {
+  try {
+    if (isRateLimited('reset_' + (req.ip || 'unknown'), 8, 60_000)) {
+      res.status(429).json({ success: false, error: '너무 많은 시도가 있었습니다. 잠시 후 다시 시도해주세요.' });
+      return;
+    }
+    const identifier = String(req.body?.usernameOrEmail || '').trim();
+    const questionNumber = Number(req.body?.questionNumber);
+    const answer = String(req.body?.answer || '');
+    const newPassword = String(req.body?.newPassword || '');
+    if (newPassword.length < 4) {
+      res.status(400).json({ success: false, error: 'Password must be at least 4 characters.' });
+      return;
+    }
+    const user = await findUserByIdentifier(identifier);
+    const q = user?.security_questions?.find((sq: any) => sq.question_number === questionNumber);
+    if (!user || !q) {
+      res.status(400).json({ success: false, error: '계정 또는 보안 질문을 확인할 수 없습니다.' });
+      return;
+    }
+    if (hashSecurityAnswer(answer) !== q.answer_hash) {
+      res.status(401).json({ success: false, error: '보안 답변이 일치하지 않습니다.' });
+      return;
+    }
+    const newHash = await bcrypt.hash(newPassword, 10);
+    await admin.firestore().collection('users').doc(user.id).update({ password_hash: newHash });
+    res.json({ success: true });
+  } catch (e: any) {
+    console.error('Password reset error:', e);
+    res.status(500).json({ success: false, error: e.message || 'Password update failed.' });
+  }
+});
+
+// Legacy "answer all 3 questions at once" variant. Kept for interface
+// completeness (the shipped UI currently only uses the single-question flow
+// above) but implemented with the same server-side verification.
+app.post('/api/auth/reset-password-with-answers', async (req, res) => {
+  try {
+    if (isRateLimited('reset3_' + (req.ip || 'unknown'), 8, 60_000)) {
+      res.status(429).json({ success: false, error: 'Too many attempts. Please try again shortly.' });
+      return;
+    }
+    const identifier = String(req.body?.usernameOrEmail || '').trim();
+    const answers: string[] = Array.isArray(req.body?.answers) ? req.body.answers : [];
+    const newPassword = String(req.body?.newPassword || '');
+    if (newPassword.length < 4) {
+      res.status(400).json({ success: false, error: 'Password must be at least 4 characters.' });
+      return;
+    }
+    const user = await findUserByIdentifier(identifier);
+    if (!user || !Array.isArray(user.security_questions) || user.security_questions.length < 3) {
+      res.status(400).json({ success: false, error: 'User does not have 3 security questions on file.' });
+      return;
+    }
+    for (let i = 0; i < 3; i++) {
+      const expected = user.security_questions[i]?.answer_hash;
+      if (!expected || hashSecurityAnswer(answers[i] || '') !== expected) {
+        res.status(401).json({ success: false, error: `Answer to question #${i + 1} does not match our records.` });
+        return;
+      }
+    }
+    const newHash = await bcrypt.hash(newPassword, 10);
+    await admin.firestore().collection('users').doc(user.id).update({ password_hash: newHash });
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || 'Password update failed.' });
+  }
+});
+
+// ---- Admin-only user management --------------------------------------
+// Role changes, password resets and deletes for OTHER users must never be
+// directly client-writable - that was exactly how the open Firestore rules
+// let anyone promote themselves to ADMIN. Every route below re-verifies the
+// caller is an admin via requireAdmin (Firebase ID token + Firestore role
+// check), independent of anything the request body claims.
+
+app.get('/api/admin/users', requireAdmin, async (_req, res) => {
+  try {
+    const snap = await admin.firestore().collection('users').get();
+    const users = snap.docs.map((d) => sanitizeProfile({ id: d.id, ...d.data() }));
+    res.json({ success: true, users });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || 'Failed to load users' });
+  }
+});
+
+app.patch('/api/admin/users/:id', requireAdmin, async (req, res) => {
+  try {
+    const updates = { ...(req.body || {}) };
+    // These have their own dedicated, more carefully-guarded endpoints -
+    // never let a generic profile-update call touch them.
+    delete updates.password_hash;
+    delete updates.security_questions;
+    delete updates.id;
+    delete updates.role;
+    await admin.firestore().collection('users').doc(req.params.id).set(updates, { merge: true });
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || 'Failed to update user profile' });
+  }
+});
+
+app.patch('/api/admin/users/:id/role', requireAdmin, async (req, res) => {
+  try {
+    const role = req.body?.role === 'ADMIN' ? 'ADMIN' : 'USER';
+    await admin.firestore().collection('users').doc(req.params.id).update({ role });
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || 'Failed to update role' });
+  }
+});
+
+app.post('/api/admin/users/:id/reset-password', requireAdmin, async (req, res) => {
+  try {
+    const newPassword = String(req.body?.newPassword || '').trim();
+    if (!newPassword) {
+      res.status(400).json({ success: false, error: '새 비밀번호를 입력해주세요.' });
+      return;
+    }
+    const newHash = await bcrypt.hash(newPassword, 10);
+    await admin.firestore().collection('users').doc(req.params.id).set({ password_hash: newHash }, { merge: true });
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || '비밀번호 초기화에 실패했습니다.' });
+  }
+});
+
+app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
+  try {
+    await admin.firestore().collection('users').doc(req.params.id).delete();
+    await admin.auth().deleteUser(req.params.id).catch(() => {});
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || 'Failed to delete user' });
+  }
 });
 
 // Gemini AI Management Hub Endpoint
@@ -150,8 +798,9 @@ Events Overview: ${JSON.stringify(eventsSummary || {})}`;
   }
 });
 
-// Automated Approval Email Dispatch Endpoint
-app.post('/api/email/send-approval', (req, res) => {
+// Automated Approval Email Dispatch Endpoint (admin-only: triggered when an
+// admin approves a submitted event)
+app.post('/api/email/send-approval', requireAdmin, (req, res) => {
   try {
     const { to, authorName, event, subject, body } = req.body;
     
@@ -223,8 +872,12 @@ async function validateSingleUrl(item: CandidateUrlToValidate): Promise<Validati
     return { id, url: trimmed, eventName, isValid: false, reason: 'HTTP/HTTPS 프로토콜이 아님' };
   }
 
-  if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname.includes('example.com')) {
+  if (parsed.hostname.includes('example.com')) {
     return { id, url: trimmed, eventName, isValid: false, reason: '로컬 또는 테스트용 임시 주소' };
+  }
+
+  if (!(await isSafeExternalUrl(trimmed))) {
+    return { id, url: trimmed, eventName, isValid: false, reason: '허용되지 않는 주소 (사설/내부 네트워크 주소로 판단됨)' };
   }
 
   // Specialized validation for Facebook community sources
@@ -245,14 +898,13 @@ async function validateSingleUrl(item: CandidateUrlToValidate): Promise<Validati
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 6000);
-    const res = await fetch(trimmed, {
+    const res = await safeFetch(trimmed, {
       method: 'GET',
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
       },
-      redirect: 'follow',
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
@@ -327,8 +979,8 @@ async function validateSingleUrl(item: CandidateUrlToValidate): Promise<Validati
   }
 }
 
-// URL Validation Endpoint for Crawler & Admin Audit
-app.post('/api/crawler/validate-urls', async (req, res) => {
+// URL Validation Endpoint for Crawler & Admin Audit (admin-only)
+app.post('/api/crawler/validate-urls', requireAdmin, async (req, res) => {
   try {
     const candidates: CandidateUrlToValidate[] = req.body.candidates || [];
     if (!Array.isArray(candidates) || candidates.length === 0) {
@@ -1647,6 +2299,9 @@ const handleExtractSiteEvents: express.RequestHandler = async (req, res) => {
       // Live fetch & recursive sub-site search for arbitrary official website URLs
       // Resilient multi-user-agent fetcher to bypass Nginx / WAF 403 Forbidden on dance festival servers
       const fetchWithFallback = async (targetUrl: string, timeoutMs: number = 7000): Promise<{ ok: boolean; html: string }> => {
+        if (!(await isSafeExternalUrl(targetUrl))) {
+          return { ok: false, html: '' };
+        }
         const uas = [
           'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -1657,14 +2312,13 @@ const handleExtractSiteEvents: express.RequestHandler = async (req, res) => {
           try {
             const ctrl = new AbortController();
             const tid = setTimeout(() => ctrl.abort(), timeoutMs);
-            const r = await fetch(targetUrl, {
+            const r = await safeFetch(targetUrl, {
               method: 'GET',
               headers: {
                 'User-Agent': ua,
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.9,ko;q=0.8',
               },
-              redirect: 'follow',
               signal: ctrl.signal,
             });
             clearTimeout(tid);
@@ -1695,7 +2349,10 @@ const handleExtractSiteEvents: express.RequestHandler = async (req, res) => {
       try {
         const parsedBase = new URL(trimmedUrl);
         const wpPagesUrl = `${parsedBase.origin}/wp-json/wp/v2/pages?per_page=20`;
-        const wpRes = await fetch(wpPagesUrl, {
+        if (!(await isSafeExternalUrl(wpPagesUrl))) {
+          throw new Error('unsafe target');
+        }
+        const wpRes = await safeFetch(wpPagesUrl, {
           headers: {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
           },
@@ -1875,7 +2532,7 @@ ${combinedSubSiteText.slice(0, 16000)}`;
     let fetchedHtml = '';
     let fetchSucceeded = false;
 
-    if (trimmedUrl) {
+    if (trimmedUrl && (await isSafeExternalUrl(trimmedUrl))) {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 8000);
@@ -1886,10 +2543,9 @@ ${combinedSubSiteText.slice(0, 16000)}`;
           'Accept-Language': 'en-US,en;q=0.9,ko;q=0.8',
         };
 
-        const resp = await fetch(trimmedUrl, {
+        const resp = await safeFetch(trimmedUrl, {
           method: 'GET',
           headers: fetchHeaders,
-          redirect: 'follow',
           signal: controller.signal,
         });
         clearTimeout(timeoutId);
@@ -1967,8 +2623,10 @@ ${combinedSubSiteText.slice(0, 16000)}`;
   }
 };
 
-app.post('/api/crawler/extract-site-events', handleExtractSiteEvents);
-app.post('/api/site-events/extract', handleExtractSiteEvents);
+// Admin-only: both make the server fetch third-party URLs on the caller's
+// behalf, which must not be exposed to unauthenticated callers.
+app.post('/api/crawler/extract-site-events', requireAdmin, handleExtractSiteEvents);
+app.post('/api/site-events/extract', requireAdmin, handleExtractSiteEvents);
 
 app.get('/api/download/header-background', (_req, res) => {
   const filePath = path.join(process.cwd(), 'public', 'header_background.png');
