@@ -1,0 +1,8 @@
+{
+  "firestore": [
+    {
+      "database": "ai-studio-everytango-0b004360-5970-4f4c-a825-315bfba50a27",
+      "rules": "firestore.rules"
+    }
+  ]
+}

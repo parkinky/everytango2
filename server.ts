@@ -7,6 +7,7 @@ import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import admin from 'firebase-admin';
+import { getFirestore } from 'firebase-admin/firestore';
 import bcrypt from 'bcryptjs';
 import { Agent as UndiciAgent, fetch as undiciFetch, type Response as UndiciResponse } from 'undici';
 import firebaseAppletConfig from './firebase-applet-config.json';
@@ -35,6 +36,19 @@ try {
     (e as Error).message
   );
 }
+
+// The client (src/firebase.ts) reads/writes a *named* Firestore database -
+// firebaseAppletConfig.firestoreDatabaseId - not the project's "(default)"
+// database. admin.firestore() with no arguments only ever targets
+// "(default)", which is a completely separate, empty database from the one
+// this project's existing `users` data and Firestore rules actually live
+// in. Every server-side Firestore access below must go through this same
+// named database instead, or none of it would ever see real data.
+function getFirestoreDb(): FirebaseFirestore.Firestore {
+  const dbId = firebaseAppletConfig.firestoreDatabaseId;
+  return dbId && dbId !== '(default)' ? getFirestore(admin.app(), dbId) : admin.firestore();
+}
+// ------------------------------------------------------------------------
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -87,7 +101,7 @@ async function verifyAdminAuth(req: express.Request): Promise<{ ok: boolean; sta
   }
   try {
     const decoded = await admin.auth().verifyIdToken(idToken);
-    const snap = await admin.firestore().collection('users').doc(decoded.uid).get();
+    const snap = await getFirestoreDb().collection('users').doc(decoded.uid).get();
     const role = snap.exists ? (snap.data() as any)?.role : null;
     const email = (decoded.email || '').toLowerCase();
     // The ADMIN_EMAIL bootstrap fallback only ever trusts a *verified*
@@ -152,7 +166,7 @@ const requireAuth: express.RequestHandler = async (req, res, next) => {
 async function findUserByField(field: 'email' | 'username', value: string): Promise<any | null> {
   const clean = (value || '').trim().toLowerCase();
   if (!clean) return null;
-  const snap = await admin.firestore().collection('users').where(field, '==', clean).limit(1).get();
+  const snap = await getFirestoreDb().collection('users').where(field, '==', clean).limit(1).get();
   if (snap.empty) return null;
   return { id: snap.docs[0].id, ...snap.docs[0].data() };
 }
@@ -370,7 +384,7 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
     const uid = (req as any).authUid as string;
     const email = ((req as any).authEmail as string) || '';
     const emailVerified = !!(req as any).authEmailVerified;
-    const ref = admin.firestore().collection('users').doc(uid);
+    const ref = getFirestoreDb().collection('users').doc(uid);
     const snap = await ref.get();
     if (snap.exists) {
       const nowIso = new Date().toISOString();
@@ -488,7 +502,7 @@ app.post('/api/auth/register', async (req, res) => {
       security_questions: hashedQuestions,
       password_hash: passwordHash,
     };
-    await admin.firestore().collection('users').doc(fbUser.uid).set(profile);
+    await getFirestoreDb().collection('users').doc(fbUser.uid).set(profile);
     const token = await admin.auth().createCustomToken(fbUser.uid);
     res.json({ success: true, token, profile: sanitizeProfile(profile) });
   } catch (e: any) {
@@ -527,14 +541,14 @@ app.post('/api/auth/login', async (req, res) => {
       passwordOk = user.password_hash === password;
       if (passwordOk) {
         const upgradedHash = await bcrypt.hash(password, 10);
-        await admin.firestore().collection('users').doc(user.id).update({ password_hash: upgradedHash }).catch(() => {});
+        await getFirestoreDb().collection('users').doc(user.id).update({ password_hash: upgradedHash }).catch(() => {});
       }
     }
     if (!passwordOk) {
       res.status(401).json({ success: false, error: 'Invalid username/email or password.' });
       return;
     }
-    admin.firestore().collection('users').doc(user.id).update({ last_login: new Date().toISOString() }).catch(() => {});
+    getFirestoreDb().collection('users').doc(user.id).update({ last_login: new Date().toISOString() }).catch(() => {});
     const token = await admin.auth().createCustomToken(user.id);
     res.json({ success: true, token, profile: sanitizeProfile(user) });
   } catch (e: any) {
@@ -634,7 +648,7 @@ app.post('/api/auth/reset-password-with-answer', async (req, res) => {
       return;
     }
     const newHash = await bcrypt.hash(newPassword, 10);
-    await admin.firestore().collection('users').doc(user.id).update({ password_hash: newHash });
+    await getFirestoreDb().collection('users').doc(user.id).update({ password_hash: newHash });
     res.json({ success: true });
   } catch (e: any) {
     console.error('Password reset error:', e);
@@ -671,7 +685,7 @@ app.post('/api/auth/reset-password-with-answers', async (req, res) => {
       }
     }
     const newHash = await bcrypt.hash(newPassword, 10);
-    await admin.firestore().collection('users').doc(user.id).update({ password_hash: newHash });
+    await getFirestoreDb().collection('users').doc(user.id).update({ password_hash: newHash });
     res.json({ success: true });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || 'Password update failed.' });
@@ -687,7 +701,7 @@ app.post('/api/auth/reset-password-with-answers', async (req, res) => {
 
 app.get('/api/admin/users', requireAdmin, async (_req, res) => {
   try {
-    const snap = await admin.firestore().collection('users').get();
+    const snap = await getFirestoreDb().collection('users').get();
     const users = snap.docs.map((d) => sanitizeProfile({ id: d.id, ...d.data() }));
     res.json({ success: true, users });
   } catch (e: any) {
@@ -704,7 +718,7 @@ app.patch('/api/admin/users/:id', requireAdmin, async (req, res) => {
     delete updates.security_questions;
     delete updates.id;
     delete updates.role;
-    await admin.firestore().collection('users').doc(req.params.id).set(updates, { merge: true });
+    await getFirestoreDb().collection('users').doc(req.params.id).set(updates, { merge: true });
     res.json({ success: true });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || 'Failed to update user profile' });
@@ -714,7 +728,7 @@ app.patch('/api/admin/users/:id', requireAdmin, async (req, res) => {
 app.patch('/api/admin/users/:id/role', requireAdmin, async (req, res) => {
   try {
     const role = req.body?.role === 'ADMIN' ? 'ADMIN' : 'USER';
-    await admin.firestore().collection('users').doc(req.params.id).update({ role });
+    await getFirestoreDb().collection('users').doc(req.params.id).update({ role });
     res.json({ success: true });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || 'Failed to update role' });
@@ -729,7 +743,7 @@ app.post('/api/admin/users/:id/reset-password', requireAdmin, async (req, res) =
       return;
     }
     const newHash = await bcrypt.hash(newPassword, 10);
-    await admin.firestore().collection('users').doc(req.params.id).set({ password_hash: newHash }, { merge: true });
+    await getFirestoreDb().collection('users').doc(req.params.id).set({ password_hash: newHash }, { merge: true });
     res.json({ success: true });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || '비밀번호 초기화에 실패했습니다.' });
@@ -738,7 +752,7 @@ app.post('/api/admin/users/:id/reset-password', requireAdmin, async (req, res) =
 
 app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
   try {
-    await admin.firestore().collection('users').doc(req.params.id).delete();
+    await getFirestoreDb().collection('users').doc(req.params.id).delete();
     await admin.auth().deleteUser(req.params.id).catch(() => {});
     res.json({ success: true });
   } catch (e: any) {
