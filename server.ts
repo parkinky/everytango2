@@ -404,7 +404,27 @@ app.post('/api/auth/login', async (req, res) => {
       return;
     }
     const user = await findUserByIdentifier(identifier);
-    if (!user || !user.password_hash || !(await bcrypt.compare(password, user.password_hash))) {
+    if (!user || !user.password_hash) {
+      res.status(401).json({ success: false, error: 'Invalid username/email or password.' });
+      return;
+    }
+    const isBcryptHash = /^\$2[aby]\$/.test(user.password_hash);
+    let passwordOk = false;
+    if (isBcryptHash) {
+      passwordOk = await bcrypt.compare(password, user.password_hash);
+    } else {
+      // One-time transparent upgrade path: accounts created before this fix
+      // had their password stored in plaintext in the `password_hash` field.
+      // If it still matches exactly, accept it this one last time and
+      // immediately replace it with a real bcrypt hash so the plaintext
+      // value never exists again after this login.
+      passwordOk = user.password_hash === password;
+      if (passwordOk) {
+        const upgradedHash = await bcrypt.hash(password, 10);
+        await admin.firestore().collection('users').doc(user.id).update({ password_hash: upgradedHash }).catch(() => {});
+      }
+    }
+    if (!passwordOk) {
       res.status(401).json({ success: false, error: 'Invalid username/email or password.' });
       return;
     }
