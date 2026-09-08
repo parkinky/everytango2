@@ -8,6 +8,7 @@ import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import admin from 'firebase-admin';
 import bcrypt from 'bcryptjs';
+import { Agent as UndiciAgent, fetch as undiciFetch, type Response as UndiciResponse } from 'undici';
 import firebaseAppletConfig from './firebase-applet-config.json';
 
 dotenv.config();
@@ -232,6 +233,24 @@ function isPrivateOrReservedIp(ip: string): boolean {
   return true; // couldn't parse - treat as unsafe
 }
 
+// Resolves `hostname` and returns the IP addresses it's safe to connect to,
+// or null if it can't be resolved or any resolved address is private/
+// reserved (fail closed - if even one address in the answer is unsafe, the
+// whole hostname is rejected rather than gambling on which one gets used).
+async function resolveSafeIps(hostname: string): Promise<string[] | null> {
+  if (net.isIP(hostname)) {
+    return isPrivateOrReservedIp(hostname) ? null : [hostname];
+  }
+  try {
+    const records = await dns.lookup(hostname, { all: true });
+    if (records.length === 0) return null;
+    if (records.some((r) => isPrivateOrReservedIp(r.address))) return null;
+    return records.map((r) => r.address);
+  } catch {
+    return null; // unresolvable host - fail closed
+  }
+}
+
 async function isSafeExternalUrl(rawUrl: string): Promise<boolean> {
   let parsed: URL;
   try {
@@ -242,16 +261,20 @@ async function isSafeExternalUrl(rawUrl: string): Promise<boolean> {
   if (!['http:', 'https:'].includes(parsed.protocol)) return false;
   const hostname = parsed.hostname.toLowerCase();
   if (hostname === 'localhost' || hostname === 'metadata.google.internal') return false;
-  if (net.isIP(hostname)) {
-    return !isPrivateOrReservedIp(hostname);
-  }
-  try {
-    const records = await dns.lookup(hostname, { all: true });
-    if (records.length === 0) return false;
-    return records.every((r) => !isPrivateOrReservedIp(r.address));
-  } catch {
-    return false; // unresolvable host - fail closed
-  }
+  return (await resolveSafeIps(hostname)) !== null;
+}
+
+// A dns.lookup-shaped function (same signature Node's `lookup` socket option
+// takes) that ignores whatever the system resolver would say and always
+// hands back the specific, already-validated IPs it was built with.
+function pinnedLookup(ips: string[]) {
+  return (_hostname: string, options: any, callback: (err: Error | null, address: any, family?: number) => void) => {
+    if (options && options.all) {
+      callback(null, ips.map((ip) => ({ address: ip, family: net.isIP(ip) })));
+    } else {
+      callback(null, ips[0], net.isIP(ips[0]));
+    }
+  };
 }
 
 // fetch() with `redirect: 'follow'` (or the default) will transparently
@@ -261,13 +284,48 @@ async function isSafeExternalUrl(rawUrl: string): Promise<boolean> {
 // exploit that with a single 302 to bypass the check above entirely. This
 // wrapper re-validates every hop before following it, so redirects can only
 // ever lead to another already-approved public address.
-async function safeFetch(url: string, options: RequestInit = {}, maxRedirects = 5): Promise<Response> {
+//
+// It also closes a second gap: isSafeExternalUrl's DNS lookup and the
+// connection fetch() actually opens are two separate resolutions. A domain
+// under attacker control with a very short TTL ("DNS rebinding") could
+// answer with a public IP for the check and a private/internal one moments
+// later for the real connection - the two would never be compared against
+// each other otherwise. To close that, each hop resolves the hostname once,
+// validates every address it got back, and then pins the actual TCP
+// connection to exactly those addresses via a custom Agent, so whatever the
+// resolver says a few milliseconds later can no longer change where the
+// request actually goes.
+async function safeFetch(url: string, options: RequestInit = {}, maxRedirects = 5): Promise<UndiciResponse> {
   let currentUrl = url;
   for (let i = 0; i <= maxRedirects; i++) {
-    if (!(await isSafeExternalUrl(currentUrl))) {
-      throw new Error(`Refusing to fetch unsafe or unresolvable URL: ${currentUrl}`);
+    let parsed: URL;
+    try {
+      parsed = new URL(currentUrl);
+    } catch {
+      throw new Error(`Invalid URL: ${currentUrl}`);
     }
-    const res = await fetch(currentUrl, { ...options, redirect: 'manual' });
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      throw new Error(`Refusing non-http(s) URL: ${currentUrl}`);
+    }
+    const hostname = parsed.hostname.toLowerCase();
+    if (hostname === 'localhost' || hostname === 'metadata.google.internal') {
+      throw new Error(`Refusing unsafe URL: ${currentUrl}`);
+    }
+    const safeIps = await resolveSafeIps(hostname);
+    if (!safeIps) {
+      throw new Error(`Refusing unsafe or unresolvable URL: ${currentUrl}`);
+    }
+    // Small, ephemeral, per-hop dispatcher - not explicitly closed since
+    // that could cut off the response body before the caller reads it, but
+    // undici's own idle-socket timeout (a few seconds) cleans it up shortly
+    // after each low-volume, admin-only crawl request completes.
+    const dispatcher = new UndiciAgent({ connect: { lookup: pinnedLookup(safeIps) as any } });
+    // Node's global fetch() is backed by its OWN internal undici build;
+    // handing it a dispatcher created from the separately-installed undici
+    // package (a different copy/version) throws (mismatched internal
+    // handler shape). Using undici's own fetch alongside its own Agent
+    // keeps both from the same package, avoiding that mismatch.
+    const res = await undiciFetch(currentUrl, { ...options, redirect: 'manual', dispatcher } as any);
     if (res.status >= 300 && res.status < 400) {
       const location = res.headers.get('location');
       if (!location) return res;
