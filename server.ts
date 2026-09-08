@@ -89,7 +89,16 @@ async function verifyAdminAuth(req: express.Request): Promise<{ ok: boolean; sta
     const snap = await admin.firestore().collection('users').doc(decoded.uid).get();
     const role = snap.exists ? (snap.data() as any)?.role : null;
     const email = (decoded.email || '').toLowerCase();
-    const isAdmin = role === 'ADMIN' || email === ADMIN_EMAIL.toLowerCase();
+    // The ADMIN_EMAIL bootstrap fallback only ever trusts a *verified*
+    // email claim. Firebase sets email_verified itself and it cannot be set
+    // by the client - Google sign-in gets true automatically, while the
+    // custom username/password registration endpoint below always creates
+    // its Firebase Auth user with emailVerified: false. Without this check,
+    // anyone could register a custom account using ADMIN_EMAIL as the
+    // "email" field (nothing about that endpoint proves they own that
+    // inbox) and this fallback would treat them as admin on every request
+    // forever, regardless of the Firestore `role` field.
+    const isAdmin = role === 'ADMIN' || (!!decoded.email_verified && email === ADMIN_EMAIL.toLowerCase());
     if (!isAdmin) {
       return { ok: false, status: 403, error: 'Not authorized as site admin.' };
     }
@@ -126,6 +135,7 @@ const requireAuth: express.RequestHandler = async (req, res, next) => {
     const decoded = await admin.auth().verifyIdToken(idToken);
     (req as any).authUid = decoded.uid;
     (req as any).authEmail = decoded.email || '';
+    (req as any).authEmailVerified = !!decoded.email_verified;
     next();
   } catch {
     res.status(401).json({ success: false, error: 'Invalid or expired session.' });
@@ -243,6 +253,31 @@ async function isSafeExternalUrl(rawUrl: string): Promise<boolean> {
     return false; // unresolvable host - fail closed
   }
 }
+
+// fetch() with `redirect: 'follow'` (or the default) will transparently
+// follow a 3xx response to ANY new location - including one that points at
+// an internal/private address or the cloud metadata endpoint - without ever
+// re-running isSafeExternalUrl on the redirect target. A crawled site could
+// exploit that with a single 302 to bypass the check above entirely. This
+// wrapper re-validates every hop before following it, so redirects can only
+// ever lead to another already-approved public address.
+async function safeFetch(url: string, options: RequestInit = {}, maxRedirects = 5): Promise<Response> {
+  let currentUrl = url;
+  for (let i = 0; i <= maxRedirects; i++) {
+    if (!(await isSafeExternalUrl(currentUrl))) {
+      throw new Error(`Refusing to fetch unsafe or unresolvable URL: ${currentUrl}`);
+    }
+    const res = await fetch(currentUrl, { ...options, redirect: 'manual' });
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get('location');
+      if (!location) return res;
+      currentUrl = new URL(location, currentUrl).toString();
+      continue;
+    }
+    return res;
+  }
+  throw new Error(`Too many redirects fetching: ${url}`);
+}
 // ------------------------------------------------------------------------
 
 // Health check endpoint
@@ -276,6 +311,7 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
   try {
     const uid = (req as any).authUid as string;
     const email = ((req as any).authEmail as string) || '';
+    const emailVerified = !!(req as any).authEmailVerified;
     const ref = admin.firestore().collection('users').doc(uid);
     const snap = await ref.get();
     if (snap.exists) {
@@ -287,6 +323,11 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
     // First time we see this Firebase Auth identity (e.g. a fresh Google
     // sign-in, which never goes through /api/auth/register) - create a
     // default profile for it, same defaults the old client code used.
+    //
+    // The ADMIN_EMAIL auto-grant below only fires when Firebase itself has
+    // verified the email (true automatically for Google sign-in; see the
+    // matching comment on verifyAdminAuth for why this must not trust an
+    // unverified email claim).
     const nowIso = new Date().toISOString();
     const newProfile = {
       id: uid,
@@ -295,7 +336,7 @@ app.get('/api/auth/me', requireAuth, async (req, res) => {
       country_code: 'US',
       city: 'Global',
       phone: '',
-      role: email.toLowerCase() === ADMIN_EMAIL.toLowerCase() ? 'ADMIN' : 'USER',
+      role: emailVerified && email.toLowerCase() === ADMIN_EMAIL.toLowerCase() ? 'ADMIN' : 'USER',
       created_at: nowIso,
       last_login: nowIso,
     };
@@ -365,7 +406,14 @@ app.post('/api/auth/register', async (req, res) => {
 
     const fbUser = await admin.auth().createUser({ email: cleanEmail, emailVerified: false });
     const nowIso = new Date().toISOString();
-    const role = cleanEmail === ADMIN_EMAIL.toLowerCase() ? 'ADMIN' : 'USER';
+    // Deliberately never auto-grant ADMIN here, even if cleanEmail matches
+    // ADMIN_EMAIL: this endpoint is unauthenticated and takes the email as a
+    // plain string with no proof of ownership, so anyone who knows the
+    // admin's address (it's the literal default value in .env.example)
+    // could otherwise register with it first and permanently claim ADMIN.
+    // The real admin bootstraps by signing in with Google using that same
+    // address instead (see /api/auth/me), which Firebase itself verifies.
+    const role = 'USER';
     const profile = {
       id: fbUser.uid,
       username: cleanUsername,
@@ -792,14 +840,13 @@ async function validateSingleUrl(item: CandidateUrlToValidate): Promise<Validati
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 6000);
-    const res = await fetch(trimmed, {
+    const res = await safeFetch(trimmed, {
       method: 'GET',
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
       },
-      redirect: 'follow',
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
@@ -2207,14 +2254,13 @@ const handleExtractSiteEvents: express.RequestHandler = async (req, res) => {
           try {
             const ctrl = new AbortController();
             const tid = setTimeout(() => ctrl.abort(), timeoutMs);
-            const r = await fetch(targetUrl, {
+            const r = await safeFetch(targetUrl, {
               method: 'GET',
               headers: {
                 'User-Agent': ua,
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.9,ko;q=0.8',
               },
-              redirect: 'follow',
               signal: ctrl.signal,
             });
             clearTimeout(tid);
@@ -2248,7 +2294,7 @@ const handleExtractSiteEvents: express.RequestHandler = async (req, res) => {
         if (!(await isSafeExternalUrl(wpPagesUrl))) {
           throw new Error('unsafe target');
         }
-        const wpRes = await fetch(wpPagesUrl, {
+        const wpRes = await safeFetch(wpPagesUrl, {
           headers: {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
           },
@@ -2439,10 +2485,9 @@ ${combinedSubSiteText.slice(0, 16000)}`;
           'Accept-Language': 'en-US,en;q=0.9,ko;q=0.8',
         };
 
-        const resp = await fetch(trimmedUrl, {
+        const resp = await safeFetch(trimmedUrl, {
           method: 'GET',
           headers: fetchHeaders,
-          redirect: 'follow',
           signal: controller.signal,
         });
         clearTimeout(timeoutId);
