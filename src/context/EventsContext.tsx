@@ -191,16 +191,6 @@ export function recordDeletedEventIds(ids: string[]): void {
 
 export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [events, setEvents] = useState<TangoEvent[]>(() => {
-    // User requested fresh start wipe: purge previous events
-    const freshStartKey = 'everytango_fresh_start_v6';
-    if (!localStorage.getItem(freshStartKey)) {
-      localStorage.setItem('everytango_events', '[]');
-      localStorage.removeItem(DELETED_EVENT_IDS_KEY);
-      localStorage.setItem('everytango_seeded_v2', '1');
-      localStorage.setItem(freshStartKey, '1');
-      return [];
-    }
-
     const deletedIds = getDeletedEventIds();
     const cached = localStorage.getItem('everytango_events');
     if (cached) {
@@ -266,20 +256,6 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
       unsub = onSnapshot(eventsQuery, (snapshot) => {
         const deletedIds = getDeletedEventIds();
-
-        // If fresh start wipe hasn't cleaned remote Firestore yet, purge all existing remote events
-        if (!localStorage.getItem('everytango_fresh_start_v6_firestore_purged')) {
-          localStorage.setItem('everytango_fresh_start_v6_firestore_purged', '1');
-          if (!snapshot.empty) {
-            snapshot.forEach((d) => {
-              deleteDoc(doc(db, 'events', d.id)).catch(() => {});
-            });
-          }
-          setEvents([]);
-          localStorage.setItem('everytango_events', '[]');
-          setLoading(false);
-          return;
-        }
 
         if (!snapshot.empty) {
           const list: TangoEvent[] = [];
@@ -576,9 +552,6 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setEvents([]);
     localStorage.setItem('everytango_events', '[]');
     localStorage.removeItem(DELETED_EVENT_IDS_KEY);
-    localStorage.setItem('everytango_seeded_v2', '1');
-    localStorage.setItem('everytango_fresh_start_v6', '1');
-    localStorage.setItem('everytango_fresh_start_v6_firestore_purged', '1');
 
     // 2. Wipe Firestore events collection if accessible
     try {
