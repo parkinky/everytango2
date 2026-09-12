@@ -11,7 +11,7 @@ import { ExperiencesProvider } from './context/ExperiencesContext';
 import { SiteConfigProvider, useSiteConfig } from './context/SiteConfigContext';
 import { SupportedLanguage } from './types';
 import { translations } from './i18n';
-import { Compass, Sparkles, Megaphone, ShieldCheck, LogOut, Download } from 'lucide-react';
+import { Compass, Sparkles, Megaphone, ShieldCheck, LogOut } from 'lucide-react';
 import { TangoMilongaHallSilhouette } from './components/TangoMilongaHallSilhouette';
 
 function MainAppContent() {
@@ -135,21 +135,9 @@ function MainAppContent() {
               </div>
 
               <div className="relative z-10 w-full space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-red-50 text-red-600 text-[11px] font-semibold border border-red-100">
-                    <Compass className="w-3 h-3" />
-                    <span>Verified Tango Events Global Radar</span>
-                  </div>
-
-                  <a
-                    href="/api/download/header-background"
-                    download="header_background.png"
-                    className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-white/90 hover:bg-white text-gray-700 hover:text-gray-900 text-[11px] font-medium border border-gray-200 shadow-xs transition-colors"
-                    title="헤더 배경 그림을 PNG 파일로 다운로드"
-                  >
-                    <Download className="w-3 h-3 text-gray-500" />
-                    <span>배경 PNG 다운로드</span>
-                  </a>
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-red-50 text-red-600 text-[11px] font-semibold border border-red-100">
+                  <Compass className="w-3 h-3" />
+                  <span>Verified Tango Events Global Radar</span>
                 </div>
                 
                 {/* Dynamically controlled headline from SiteConfig / Gemini */}

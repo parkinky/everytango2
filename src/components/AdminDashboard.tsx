@@ -40,7 +40,8 @@ import {
   Mail,
   Facebook,
   Download,
-  RotateCcw
+  RotateCcw,
+  UserPlus
 } from 'lucide-react';
 import { SupportedLanguage, TangoEvent, UserProfile, UserRole, EventType, EventStatus, CrawlingChannel } from '../types';
 import { translations, COUNTRY_LIST } from '../i18n';
@@ -88,7 +89,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
     updateUserRole, 
     updateUserProfile,
     resetUserPasswordByAdmin,
-    deleteUser 
+    deleteUser,
+    adminCreateUser 
   } = useAuth();
 
   const { 
@@ -183,6 +185,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
     variant: 'danger',
     onConfirm: () => {},
   });
+  const [confirmSubmitting, setConfirmSubmitting] = useState(false);
+
+  // Add User Modal State
+  const [isAddUserModalOpen, setIsAddUserModalOpen] = useState(false);
+  const [addUserForm, setAddUserForm] = useState<{
+    username: string;
+    email: string;
+    password: string;
+    role: UserRole;
+    city: string;
+    country_code: string;
+    phone: string;
+  }>({
+    username: '',
+    email: '',
+    password: '',
+    role: 'USER',
+    city: '',
+    country_code: 'US',
+    phone: '',
+  });
+  const [addUserLoading, setAddUserLoading] = useState(false);
+  const [addUserError, setAddUserError] = useState('');
 
   // Automated Approval Notification Email Modal State
   const [approvalEmailSuccessModal, setApprovalEmailSuccessModal] = useState<{
@@ -535,14 +560,83 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
       cancelText: '취소',
       variant: 'danger',
       onConfirm: async () => {
-        await deleteUser(user.id);
+        await deleteUser(user.id, user.username);
         setConfirmModal((prev) => ({ ...prev, isOpen: false }));
         if (selectedUserDetails?.id === user.id) {
           setSelectedUserDetails(null);
         }
         await loadAllUsers();
+        alert(`사용자 "${user.username}" (${user.email}) 계정이 영구 삭제되었습니다.`);
       },
     });
+  };
+
+  // Open Add User Modal
+  const handleOpenAddUserModal = () => {
+    setAddUserForm({
+      username: '',
+      email: '',
+      password: '',
+      role: 'USER',
+      city: '',
+      country_code: 'US',
+      phone: '',
+    });
+    setAddUserError('');
+    setIsAddUserModalOpen(true);
+  };
+
+  // Submit Add User
+  const handleCreateUserSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAddUserError('');
+
+    const cleanUsername = addUserForm.username.trim();
+    const cleanEmail = addUserForm.email.trim();
+    const cleanPassword = addUserForm.password.trim();
+
+    if (!cleanUsername) {
+      setAddUserError('아이디(Username)를 입력해주세요.');
+      return;
+    }
+    if (cleanUsername.length < 3) {
+      setAddUserError('아이디는 최소 3자 이상이어야 합니다.');
+      return;
+    }
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setAddUserError('유효한 이메일 주소를 입력해주세요.');
+      return;
+    }
+    if (!cleanPassword || cleanPassword.length < 4) {
+      setAddUserError('비밀번호는 최소 4자 이상 입력해주세요.');
+      return;
+    }
+
+    setAddUserLoading(true);
+    try {
+      const res = await adminCreateUser({
+        username: cleanUsername,
+        email: cleanEmail,
+        password_hash: cleanPassword,
+        role: addUserForm.role,
+        city: addUserForm.city,
+        country_code: addUserForm.country_code,
+        phone: addUserForm.phone,
+      });
+
+      if (!res.success) {
+        setAddUserError(res.error || '사용자 생성에 실패했습니다.');
+        return;
+      }
+
+      setIsAddUserModalOpen(false);
+      await loadAllUsers();
+      alert(`사용자 "${cleanUsername}" (${cleanEmail}) 계정이 성공적으로 등록되었습니다.`);
+    } catch (err: any) {
+      setAddUserError(err?.message || '사용자 생성 중 오류가 발생했습니다.');
+    } finally {
+      setAddUserLoading(false);
+    }
   };
 
   // --- CRAWLING CHANNEL HANDLERS ---
@@ -1949,6 +2043,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
             </div>
 
             <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleOpenAddUserModal}
+                className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors shrink-0 cursor-pointer"
+                title="새로운 사용자 등록"
+              >
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>사용자 추가</span>
+              </button>
+
               <div className="relative w-full sm:w-64">
                 <Search className="w-3.5 h-3.5 absolute left-3 top-3 text-gray-400" />
                 <input
@@ -3795,6 +3899,177 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
       )}
 
       {/* ========================================================================= */}
+      {/* ADD USER POPUP MODAL (새 사용자 등록 모달)                                 */}
+      {/* ========================================================================= */}
+      {isAddUserModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white border border-gray-200 rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden text-xs text-gray-800 animate-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/70">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-red-100 text-red-600 flex items-center justify-center">
+                  <UserPlus className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-sm text-gray-900">새 사용자 등록 (Add New User)</h3>
+                  <p className="text-[11px] text-gray-500">관리자 권한으로 시스템에 새로운 사용자 계정을 생성합니다.</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAddUserModalOpen(false)}
+                className="text-gray-400 hover:text-gray-600 p-1 cursor-pointer rounded-lg hover:bg-gray-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Body / Form */}
+            <form onSubmit={handleCreateUserSubmit} className="p-6 space-y-4">
+              {addUserError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+                  <span>{addUserError}</span>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                <div className="space-y-1">
+                  <label className="block font-bold text-gray-700">
+                    아이디 (Username) <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="예: tango_dancer"
+                    value={addUserForm.username}
+                    onChange={(e) => setAddUserForm({ ...addUserForm, username: e.target.value.replace(/\s+/g, '') })}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-red-600 focus:outline-none"
+                  />
+                  <p className="text-[10px] text-gray-400">공백 없이 영문/숫자 3자 이상</p>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block font-bold text-gray-700">
+                    이메일 (Email) <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    placeholder="예: dancer@example.com"
+                    value={addUserForm.email}
+                    onChange={(e) => setAddUserForm({ ...addUserForm, email: e.target.value.trim() })}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-red-600 focus:outline-none"
+                  />
+                  <p className="text-[10px] text-gray-400">로그인 및 알림 수신에 사용됩니다</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                <div className="space-y-1">
+                  <label className="block font-bold text-gray-700">
+                    초기 비밀번호 (Password) <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    placeholder="최소 4자 이상"
+                    value={addUserForm.password}
+                    onChange={(e) => setAddUserForm({ ...addUserForm, password: e.target.value })}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-red-600 focus:outline-none"
+                  />
+                  <p className="text-[10px] text-gray-400">등록 후 사용자가 재설정 가능합니다</p>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block font-bold text-gray-700">
+                    권한 등급 (Role) <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={addUserForm.role}
+                    onChange={(e) => setAddUserForm({ ...addUserForm, role: e.target.value as UserRole })}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-red-600 focus:outline-none"
+                  >
+                    <option value="USER">일반 사용자 (USER)</option>
+                    <option value="ADMIN">시스템 관리자 (ADMIN)</option>
+                  </select>
+                  <p className="text-[10px] text-gray-400">관리자 대시보드 접근 권한 여부</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+                <div className="space-y-1">
+                  <label className="block font-bold text-gray-700">국가 (Country)</label>
+                  <select
+                    value={addUserForm.country_code}
+                    onChange={(e) => setAddUserForm({ ...addUserForm, country_code: e.target.value })}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-red-600 focus:outline-none"
+                  >
+                    {COUNTRY_LIST.map((c) => (
+                      <option key={c.code} value={c.code}>
+                        {c.name} ({c.code})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block font-bold text-gray-700">도시 (City)</label>
+                  <input
+                    type="text"
+                    placeholder="예: Seoul, Buenos Aires"
+                    value={addUserForm.city}
+                    onChange={(e) => setAddUserForm({ ...addUserForm, city: e.target.value })}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-red-600 focus:outline-none"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block font-bold text-gray-700">연락처 (Phone)</label>
+                  <input
+                    type="text"
+                    placeholder="예: +82 10-1234-5678"
+                    value={addUserForm.phone}
+                    onChange={(e) => setAddUserForm({ ...addUserForm, phone: e.target.value })}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-red-600 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {/* Form Actions */}
+              <div className="pt-3 flex items-center justify-end gap-2 border-t border-gray-100">
+                <button
+                  type="button"
+                  disabled={addUserLoading}
+                  onClick={() => setIsAddUserModalOpen(false)}
+                  className="px-4 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-700 font-semibold cursor-pointer transition-colors disabled:opacity-50"
+                >
+                  취소
+                </button>
+                <button
+                  type="submit"
+                  disabled={addUserLoading}
+                  className="px-5 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-bold shadow-xs cursor-pointer transition-colors flex items-center gap-1.5 disabled:opacity-70"
+                >
+                  {addUserLoading ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>생성 중...</span>
+                    </>
+                  ) : (
+                    <>
+                      <UserPlus className="w-3.5 h-3.5" />
+                      <span>사용자 생성 (Save)</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
       {/* GLOBAL CONFIRMATION POPUP MODAL (모든 삭제 및 변경 사전 확인 팝업) */}
       {/* ========================================================================= */}
       {confirmModal.isOpen && (
@@ -3831,21 +4106,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
             <div className="pt-2 flex items-center justify-end gap-2 border-t border-gray-100">
               <button
                 type="button"
+                disabled={confirmSubmitting}
                 onClick={() => setConfirmModal((prev) => ({ ...prev, isOpen: false }))}
-                className="px-4 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-700 font-semibold cursor-pointer transition-colors"
+                className="px-4 py-2 rounded-lg border border-gray-200 hover:bg-gray-50 text-gray-700 font-semibold cursor-pointer transition-colors disabled:opacity-50"
               >
                 {confirmModal.cancelText || '취소'}
               </button>
               <button
                 type="button"
+                disabled={confirmSubmitting}
                 onClick={async () => {
+                  if (confirmSubmitting) return;
+                  setConfirmSubmitting(true);
                   try {
                     await confirmModal.onConfirm();
-                  } catch (err) {
+                  } catch (err: any) {
                     console.error('Confirm action failed:', err);
+                    alert('작업 처리 중 오류가 발생했습니다: ' + (err?.message || err));
+                  } finally {
+                    setConfirmSubmitting(false);
                   }
                 }}
                 className={`px-5 py-2 rounded-lg font-bold text-white shadow-xs cursor-pointer transition-colors inline-flex items-center gap-1.5 ${
+                  confirmSubmitting ? 'opacity-70 cursor-not-allowed' : ''
+                } ${
                   confirmModal.variant === 'danger'
                     ? 'bg-red-600 hover:bg-red-700'
                     : confirmModal.variant === 'warning'
@@ -3853,12 +4137,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                     : 'bg-blue-600 hover:bg-blue-700'
                 }`}
               >
-                {confirmModal.variant === 'danger' ? (
+                {confirmSubmitting ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : confirmModal.variant === 'danger' ? (
                   <Trash2 className="w-3.5 h-3.5" />
                 ) : (
                   <Check className="w-3.5 h-3.5" />
                 )}
-                <span>{confirmModal.confirmText || '확인 (Confirm)'}</span>
+                <span>{confirmSubmitting ? '처리 중...' : (confirmModal.confirmText || '확인 (Confirm)')}</span>
               </button>
             </div>
           </div>
