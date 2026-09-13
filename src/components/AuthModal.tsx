@@ -118,8 +118,8 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   };
 
   // Check Duplicate Username (ID)
-  const checkDuplicateUsername = async (uname: string): Promise<boolean> => {
-    const clean = uname.trim();
+  const checkDuplicateUsername = async (uname: string, showPopup = true): Promise<boolean> => {
+    const clean = uname.trim().toLowerCase();
     if (!clean) {
       setIsDuplicateId(false);
       return false;
@@ -129,7 +129,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       const exists = await checkUsernameExists(clean);
       if (exists) {
         setIsDuplicateId(true);
-        setShowDuplicateModal(true);
+        if (showPopup) {
+          setShowDuplicateModal(true);
+        }
         return true;
       } else {
         setIsDuplicateId(false);
@@ -521,19 +523,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     }}
                     onBlur={() => {
                       if (regUsername.trim().length >= 2) {
-                        checkDuplicateUsername(regUsername);
-                      }
-                    }}
-                    onClick={() => {
-                      if (isDuplicateId) {
-                        setRegUsername('');
-                        setIsDuplicateId(false);
-                      }
-                    }}
-                    onFocus={() => {
-                      if (isDuplicateId) {
-                        setRegUsername('');
-                        setIsDuplicateId(false);
+                        checkDuplicateUsername(regUsername, false);
                       }
                     }}
                     placeholder="tangomilonguero"

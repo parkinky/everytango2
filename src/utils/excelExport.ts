@@ -7,7 +7,17 @@ import { convertPriceToUSD, formatTwoLineAddress } from './formatters';
  */
 export function exportEventsToExcel(events: TangoEvent[], customFileName?: string): boolean {
   try {
-    const rows = events.map((ev, index) => {
+    const sortedList = [...events].sort((a, b) => {
+      const dateComp = (a.start_date || '').localeCompare(b.start_date || '');
+      if (dateComp !== 0) return dateComp;
+      const cityComp = (a.city || '').localeCompare(b.city || '', undefined, { sensitivity: 'base' });
+      if (cityComp !== 0) return cityComp;
+      const endComp = (a.end_date || '').localeCompare(b.end_date || '');
+      if (endComp !== 0) return endComp;
+      return (a.event_name || '').localeCompare(b.event_name || '');
+    });
+
+    const rows = sortedList.map((ev, index) => {
       const usdInfo = convertPriceToUSD(ev.price, ev.is_free, ev.country_code);
       const addrInfo = formatTwoLineAddress(ev);
 
@@ -18,9 +28,9 @@ export function exportEventsToExcel(events: TangoEvent[], customFileName?: strin
         'Start Date': (ev.start_date || '').replace(/[/.]/g, '-'),
         'End Date': (ev.end_date || '').replace(/[/.]/g, '-'),
         'Country': ev.country_code,
+        'Address': ev.address,
         'City': ev.city,
         'State': ev.state || '',
-        'Address': ev.address,
         'Location': addrInfo.locationLine,
         'Price (USD)': usdInfo.usdFormatted,
         'Original Price': usdInfo.originalFormatted || ev.price,
@@ -43,9 +53,9 @@ export function exportEventsToExcel(events: TangoEvent[], customFileName?: strin
       { wch: 12 },  // Start Date
       { wch: 12 },  // End Date
       { wch: 8 },   // Country
+      { wch: 35 },  // Address
       { wch: 14 },  // City
       { wch: 12 },  // State
-      { wch: 35 },  // Address
       { wch: 20 },  // Location
       { wch: 16 },  // Price USD
       { wch: 15 },  // Original Price
@@ -87,9 +97,9 @@ export function exportEventsToCSV(events: TangoEvent[], customFileName?: string)
       'Start Date',
       'End Date',
       'Country',
+      'Address',
       'City',
       'State',
-      'Address',
       'Price (USD)',
       'Original Price',
       'Source URL',
@@ -105,9 +115,9 @@ export function exportEventsToCSV(events: TangoEvent[], customFileName?: string)
         (ev.start_date || '').replace(/[/.]/g, '-'),
         (ev.end_date || '').replace(/[/.]/g, '-'),
         ev.country_code,
+        `"${(ev.address || '').replace(/"/g, '""')}"`,
         `"${(ev.city || '').replace(/"/g, '""')}"`,
         `"${(ev.state || '').replace(/"/g, '""')}"`,
-        `"${(ev.address || '').replace(/"/g, '""')}"`,
         `"${usd.usdFormatted}"`,
         `"${(usd.originalFormatted || ev.price || '').replace(/"/g, '""')}"`,
         `"${(ev.source_url || '').replace(/"/g, '""')}"`,

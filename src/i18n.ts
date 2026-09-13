@@ -7,7 +7,9 @@ export interface TranslationDict {
   nav: {
     browseEvents: string;
     submitEvent: string;
+    uploadEventManually: string;
     adminDashboard: string;
+    exitAdminDashboard: string;
     crawler: string;
     signIn: string;
     signUp: string;
@@ -15,6 +17,13 @@ export interface TranslationDict {
     profile: string;
     findId: string;
     findPw: string;
+  };
+  hero: {
+    radarBadge: string;
+    upcomingEvents: string;
+    countries: string;
+    autoCrawled: string;
+    defaultAnnouncement: string;
   };
   filter: {
     quickRange: string;
@@ -82,6 +91,43 @@ export interface TranslationDict {
     actions: string;
     experiences: string;
     addStory: string;
+    perPage: string;
+    pageOf: string;
+    pages: string;
+    prev: string;
+    next: string;
+    prevPage: string;
+    nextPage: string;
+    goToPage: string;
+    bot: string;
+    botTooltip: string;
+    fbCommunity: string;
+    freePrice: string;
+    donation: string;
+    originalPricePrefix: string;
+    adminEditTooltip: string;
+  };
+  eventLinks: {
+    directVerifiedTooltip: string;
+    moreOptionsTooltip: string;
+    menuHeader: string;
+    eventLabel: string;
+    officialWebsite: string;
+    daumCafe: string;
+    fbCalendar: string;
+    fbCalendarDesc: string;
+    fbFeed: string;
+    fbFeedDesc: string;
+    fbSearch: string;
+    fbSearchDesc: string;
+    googleSearch: string;
+    googleSearchDesc: string;
+    originalSource: string;
+  };
+  footer: {
+    crawlerActive: string;
+    apiHealthy: string;
+    dbSync: string;
   };
   auth: {
     loginTitle: string;
@@ -202,7 +248,9 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
     nav: {
       browseEvents: "Browse Events",
       submitEvent: "Submit Event",
+      uploadEventManually: "Upload Event Manually +",
       adminDashboard: "Admin Dashboard",
+      exitAdminDashboard: "Exit Admin Dashboard",
       crawler: "Weekly Crawler",
       signIn: "Sign In",
       signUp: "Register",
@@ -210,6 +258,13 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       profile: "Profile",
       findId: "Find ID",
       findPw: "Find Password",
+    },
+    hero: {
+      radarBadge: "Verified Tango Events Global Radar",
+      upcomingEvents: "Upcoming Events",
+      countries: "Countries",
+      autoCrawled: "Auto-Crawled & Deduped",
+      defaultAnnouncement: "🍂 2026 Global Tango Season Open: Verified festivals, marathons, & milongas across 50+ countries",
     },
     filter: {
       quickRange: "Quick Range",
@@ -277,6 +332,43 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       actions: "Actions",
       experiences: "Stories & Photos",
       addStory: "Add Story",
+      perPage: "per page",
+      pageOf: "of",
+      pages: "pages",
+      prev: "Prev",
+      next: "Next",
+      prevPage: "Previous page",
+      nextPage: "Next page",
+      goToPage: "Go to page",
+      bot: "Bot",
+      botTooltip: "Crawled & verified bot",
+      fbCommunity: "Facebook Tango Community",
+      freePrice: "Free($0)",
+      donation: "Donation",
+      originalPricePrefix: "Original:",
+      adminEditTooltip: "Edit event content as administrator",
+    },
+    eventLinks: {
+      directVerifiedTooltip: "Open verified source website:",
+      moreOptionsTooltip: "More links & search options",
+      menuHeader: "Event Links & Schedules",
+      eventLabel: "Event:",
+      officialWebsite: "Official Verified Website",
+      daumCafe: "Daum Cafe Official Schedule",
+      fbCalendar: "Facebook Community Events Calendar",
+      fbCalendarDesc: "View upcoming milongas & events list",
+      fbFeed: "Facebook Community Feed & Board",
+      fbFeedDesc: "Announcements & latest updates",
+      fbSearch: "Search Milongas in Group",
+      fbSearchDesc: "Posters, DJ line-up & schedules",
+      googleSearch: "Search Event on Google",
+      googleSearchDesc: "Find posters, registration forms & blogs",
+      originalSource: "Original Source URL",
+    },
+    footer: {
+      crawlerActive: "Crawler Active",
+      apiHealthy: "API Status: Healthy",
+      dbSync: "DB Synchronized",
     },
     auth: {
       loginTitle: "Welcome to Everytango",
@@ -395,7 +487,9 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
     nav: {
       browseEvents: "이벤트 목록 조회",
       submitEvent: "이벤트 등록 신청",
+      uploadEventManually: "이벤트 수동 등록 +",
       adminDashboard: "관리자 대시보드",
+      exitAdminDashboard: "관리자 대시보드 나가기",
       crawler: "주간 자동 크롤링",
       signIn: "로그인",
       signUp: "회원가입",
@@ -403,6 +497,13 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       profile: "내 정보",
       findId: "아이디 찾기",
       findPw: "비밀번호 찾기",
+    },
+    hero: {
+      radarBadge: "검증된 글로벌 탱고 이벤트 레이더",
+      upcomingEvents: "개 예정된 이벤트",
+      countries: "개국 이상",
+      autoCrawled: "자동 크롤링 & 중복 정제",
+      defaultAnnouncement: "🍂 2026 글로벌 탱고 시즌 오픈: 전 세계 50여 개국 검증된 페스티벌, 마라톤, 밀롱가 일정",
     },
     filter: {
       quickRange: "조회 범위 퀵 필터",
@@ -470,6 +571,43 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       actions: "관리",
       experiences: "경험 & 사진",
       addStory: "후기 작성",
+      perPage: "개씩 보기",
+      pageOf: "/",
+      pages: "페이지",
+      prev: "이전",
+      next: "다음",
+      prevPage: "이전 페이지",
+      nextPage: "다음 페이지",
+      goToPage: "페이지로 이동",
+      bot: "봇",
+      botTooltip: "크롤링 검증 봇 수집",
+      fbCommunity: "페이스북 탱고 커뮤니티",
+      freePrice: "무료($0)",
+      donation: "자율 기부",
+      originalPricePrefix: "원문 가격:",
+      adminEditTooltip: "관리자 권한으로 이벤트 내용 직접 수정",
+    },
+    eventLinks: {
+      directVerifiedTooltip: "크롤링 검증 웹사이트 바로가기:",
+      moreOptionsTooltip: "자료 바로가기 및 검색 옵션 더보기",
+      menuHeader: "행사 자료 및 일정 바로가기",
+      eventLabel: "행사:",
+      officialWebsite: "크롤링 검증 공식 웹사이트",
+      daumCafe: "다음 카페 공식 공지/일정",
+      fbCalendar: "페이스북 그룹 이벤트 일정표",
+      fbCalendarDesc: "예정된 밀롱가/행사 목록 바로보기",
+      fbFeed: "페이스북 그룹 홈/게시판",
+      fbFeedDesc: "공지글 및 최신 피드 확인",
+      fbSearch: "그룹 내 밀롱가 게시글 검색",
+      fbSearchDesc: "포스터 및 DJ 공지 검색",
+      googleSearch: "구글에서 행사 정보 검색",
+      googleSearchDesc: "외부 포스터, 신청폼, 블로그 찾기",
+      originalSource: "출처 원문 주소",
+    },
+    footer: {
+      crawlerActive: "크롤러 가동 중",
+      apiHealthy: "API 정상 작동",
+      dbSync: "데이터베이스 동기화 완료",
     },
     auth: {
       loginTitle: "Everytango 로그인",
@@ -588,7 +726,9 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
     nav: {
       browseEvents: "Explorar Eventos",
       submitEvent: "Publicar Evento",
+      uploadEventManually: "Publicar Evento Manualmente +",
       adminDashboard: "Panel de Administración",
+      exitAdminDashboard: "Salir de Administración",
       crawler: "Rastreador Semanal",
       signIn: "Iniciar Sesión",
       signUp: "Registrarse",
@@ -596,6 +736,13 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       profile: "Perfil",
       findId: "Recuperar Usuario",
       findPw: "Recuperar Clave",
+    },
+    hero: {
+      radarBadge: "Radar Global de Eventos de Tango Verificados",
+      upcomingEvents: "Próximos Eventos",
+      countries: "Países",
+      autoCrawled: "Rastreado y Filtrado Automático",
+      defaultAnnouncement: "🍂 Temporada Global de Tango 2026: Festivales, maratones y milongas verificados en más de 50 países",
     },
     filter: {
       quickRange: "Rango Rápido",
@@ -663,6 +810,43 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       actions: "Acciones",
       experiences: "Historias y Fotos",
       addStory: "Añadir Historia",
+      perPage: "por página",
+      pageOf: "de",
+      pages: "páginas",
+      prev: "Ant.",
+      next: "Sig.",
+      prevPage: "Página anterior",
+      nextPage: "Página siguiente",
+      goToPage: "Ir a la página",
+      bot: "Bot",
+      botTooltip: "Rastreado y verificado por bot",
+      fbCommunity: "Comunidad de Tango en Facebook",
+      freePrice: "Gratis($0)",
+      donation: "Donación",
+      originalPricePrefix: "Precio original:",
+      adminEditTooltip: "Editar contenido del evento como administrador",
+    },
+    eventLinks: {
+      directVerifiedTooltip: "Ir al sitio web verificado:",
+      moreOptionsTooltip: "Más enlaces y opciones de búsqueda",
+      menuHeader: "Enlaces y Horarios del Evento",
+      eventLabel: "Evento:",
+      officialWebsite: "Sitio Web Oficial Verificado",
+      daumCafe: "Calendario Oficial en Daum Cafe",
+      fbCalendar: "Calendario de Eventos en Facebook",
+      fbCalendarDesc: "Ver lista de próximas milongas y eventos",
+      fbFeed: "Muro y Publicaciones de la Comunidad",
+      fbFeedDesc: "Anuncios y actualizaciones recientes",
+      fbSearch: "Buscar Publicaciones en el Grupo",
+      fbSearchDesc: "Afiches, DJs y avisos",
+      googleSearch: "Buscar Información en Google",
+      googleSearchDesc: "Buscar afiches externos, inscripciones y blogs",
+      originalSource: "URL de Origen",
+    },
+    footer: {
+      crawlerActive: "Rastreador Activo",
+      apiHealthy: "Estado API: Saludable",
+      dbSync: "BD Sincronizada",
     },
     auth: {
       loginTitle: "Bienvenido a Everytango",
@@ -781,7 +965,9 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
     nav: {
       browseEvents: "イベント一覧",
       submitEvent: "イベント掲載申請",
+      uploadEventManually: "手動でイベント登録 +",
       adminDashboard: "管理者ダッシュボード",
+      exitAdminDashboard: "管理者画面を閉じる",
       crawler: "週間自動クローラー",
       signIn: "ログイン",
       signUp: "新規登録",
@@ -789,6 +975,13 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       profile: "プロフィール",
       findId: "ID検索",
       findPw: "パスワード再設定",
+    },
+    hero: {
+      radarBadge: "認証済み世界タンゴイベント・レーダー",
+      upcomingEvents: "件の開催予定イベント",
+      countries: "ヶ国以上",
+      autoCrawled: "自動収集・重複排除済み",
+      defaultAnnouncement: "🍂 2026世界タンゴシーズン開幕: 50カ国以上のフェスティバル、マラソン、ミロンガ情報を更新中",
     },
     filter: {
       quickRange: "期間クイック選択",
@@ -856,6 +1049,43 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       actions: "操作",
       experiences: "体験・写真",
       addStory: "投稿する",
+      perPage: "件ずつ表示",
+      pageOf: "/",
+      pages: "ページ",
+      prev: "前へ",
+      next: "次へ",
+      prevPage: "前のページ",
+      nextPage: "次のページ",
+      goToPage: "ページへ移動",
+      bot: "Bot",
+      botTooltip: "自動収集・検証済みBot",
+      fbCommunity: "Facebookタンゴコミュニティ",
+      freePrice: "無料($0)",
+      donation: "寄付/任意",
+      originalPricePrefix: "原文表記:",
+      adminEditTooltip: "管理者としてイベント内容を直接編集",
+    },
+    eventLinks: {
+      directVerifiedTooltip: "検証済み公式サイトを開く:",
+      moreOptionsTooltip: "関連リンクと検索オプション",
+      menuHeader: "イベント関連リンク・スケジュール",
+      eventLabel: "イベント:",
+      officialWebsite: "検証済み公式サイト",
+      daumCafe: "Daum Cafe公式スケジュール",
+      fbCalendar: "Facebookグループ イベント日程",
+      fbCalendarDesc: "予定されているミロンガ・イベント一覧",
+      fbFeed: "Facebookグループ 掲示板",
+      fbFeedDesc: "お知らせ・最新タイムライン",
+      fbSearch: "グループ内投稿を検索",
+      fbSearchDesc: "フライヤー・DJ情報・投稿検索",
+      googleSearch: "Googleでイベント情報を検索",
+      googleSearchDesc: "ポスター、申込フォーム、ブログ記事を検索",
+      originalSource: "元ソースURL",
+    },
+    footer: {
+      crawlerActive: "クローラー稼働中",
+      apiHealthy: "APIステータス: 正常",
+      dbSync: "データベース同期完了",
     },
     auth: {
       loginTitle: "Everytango ログイン",
@@ -974,7 +1204,9 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
     nav: {
       browseEvents: "浏览活动",
       submitEvent: "发布活动",
+      uploadEventManually: "手动发布活动 +",
       adminDashboard: "管理后台",
+      exitAdminDashboard: "退出管理员后台",
       crawler: "每周自动爬虫",
       signIn: "登录",
       signUp: "注册",
@@ -982,6 +1214,13 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       profile: "个人资料",
       findId: "找回账号",
       findPw: "找回密码",
+    },
+    hero: {
+      radarBadge: "全球认证阿根廷探戈活动雷达",
+      upcomingEvents: "场即将举办的活动",
+      countries: "+ 个国家",
+      autoCrawled: "自动采集与去重",
+      defaultAnnouncement: "🍂 2026 全球探戈季开启: 收录50多个国家认证探戈节、马拉松与舞会日程",
     },
     filter: {
       quickRange: "快捷日期范围",
@@ -1049,6 +1288,43 @@ export const translations: Record<SupportedLanguage, TranslationDict> = {
       actions: "操作",
       experiences: "心得与照片",
       addStory: "发布心得",
+      perPage: "条/页",
+      pageOf: "/",
+      pages: "页",
+      prev: "上一页",
+      next: "下一页",
+      prevPage: "上一页",
+      nextPage: "下一页",
+      goToPage: "跳转到第",
+      bot: "Bot",
+      botTooltip: "采集与验证机器人",
+      fbCommunity: "Facebook探戈社区",
+      freePrice: "免费($0)",
+      donation: "自愿赞助",
+      originalPricePrefix: "原价:",
+      adminEditTooltip: "以管理员身份编辑活动内容",
+    },
+    eventLinks: {
+      directVerifiedTooltip: "打开已验证的来源网址:",
+      moreOptionsTooltip: "查看更多链接与搜索选项",
+      menuHeader: "活动链接与日程",
+      eventLabel: "活动:",
+      officialWebsite: "官方认证网站",
+      daumCafe: "Daum Cafe 官方公告/日程",
+      fbCalendar: "Facebook群组活动日程表",
+      fbCalendarDesc: "查看即将举行的舞会与活动列表",
+      fbFeed: "Facebook群组主页与讨论区",
+      fbFeedDesc: "查看通知与最新动态",
+      fbSearch: "在群组内搜索活动帖子",
+      fbSearchDesc: "海报、DJ阵容与公告搜索",
+      googleSearch: "在谷歌上搜索活动信息",
+      googleSearchDesc: "查找外部海报、报名表与博客",
+      originalSource: "原始来源网址",
+    },
+    footer: {
+      crawlerActive: "爬虫正在运行",
+      apiHealthy: "API 状态: 正常",
+      dbSync: "数据库已同步",
     },
     auth: {
       loginTitle: "登录 Everytango",

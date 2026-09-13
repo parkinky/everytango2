@@ -20,13 +20,15 @@ import {
   MapPin,
   Tag,
   UserCheck,
-  Mail
+  Mail,
+  FileSpreadsheet
 } from 'lucide-react';
 import { EventType, EventStatus, SupportedLanguage, TangoEvent } from '../types';
 import { translations, COUNTRY_LIST } from '../i18n';
 import { useEvents } from '../context/EventsContext';
 import { useAuth } from '../context/AuthContext';
 import { recommendStateForCity } from '../utils/cityStateMap';
+import { ExcelBatchUploadModal } from './ExcelBatchUploadModal';
 
 interface SubmitEventFormProps {
   currentLang: SupportedLanguage;
@@ -142,6 +144,7 @@ export const SubmitEventForm: React.FC<SubmitEventFormProps> = ({
   const [showSubmittedModal, setShowSubmittedModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showAdminLoginModal, setShowAdminLoginModal] = useState(false);
+  const [showExcelBatchModal, setShowExcelBatchModal] = useState(false);
 
   // Admin Login Inputs
   const [adminIdInput, setAdminIdInput] = useState('');
@@ -816,25 +819,41 @@ export const SubmitEventForm: React.FC<SubmitEventFormProps> = ({
             </div>
           </div>
 
-          {/* Row 3: Country, City, State */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-gray-700">
-                {t.submit.country}
-              </label>
-              <select
-                value={countryCode}
-                onChange={(e) => setCountryCode(e.target.value)}
-                className="w-full bg-white border border-gray-200 rounded-md px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:ring-1 focus:ring-red-500 focus:border-red-500"
-              >
-                {COUNTRY_LIST.map((c) => (
-                  <option key={c.code} value={c.code}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+          {/* Row 3: Country */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold text-gray-700">
+              {t.submit.country}
+            </label>
+            <select
+              value={countryCode}
+              onChange={(e) => setCountryCode(e.target.value)}
+              className="w-full bg-white border border-gray-200 rounded-md px-3 py-2.5 text-sm text-gray-900 focus:outline-none focus:ring-1 focus:ring-red-500 focus:border-red-500"
+            >
+              {COUNTRY_LIST.map((c) => (
+                <option key={c.code} value={c.code}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
 
+          {/* Row 4: Street Address */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold text-gray-700">
+              {t.submit.address}
+            </label>
+            <input
+              type="text"
+              required
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              placeholder="e.g. Westin Buckhead, 3391 Peachtree Rd NE"
+              className="w-full bg-white border border-gray-200 rounded-md px-3.5 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-red-500 focus:border-red-500"
+            />
+          </div>
+
+          {/* Row 5: City and State (City placed between Address and State) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-gray-700">
                 {t.submit.city} *
@@ -914,21 +933,6 @@ export const SubmitEventForm: React.FC<SubmitEventFormProps> = ({
                 </p>
               )}
             </div>
-          </div>
-
-          {/* Row 4: Street Address */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-bold text-gray-700">
-              {t.submit.address}
-            </label>
-            <input
-              type="text"
-              required
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-              placeholder="e.g. Westin Buckhead, 3391 Peachtree Rd NE"
-              className="w-full bg-white border border-gray-200 rounded-md px-3.5 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-red-500 focus:border-red-500"
-            />
           </div>
 
           {/* Row 5: Price and Source URL */}
@@ -1064,14 +1068,26 @@ export const SubmitEventForm: React.FC<SubmitEventFormProps> = ({
                 </button>
               </>
             ) : isAdmin && adminMode === 'CREATE' ? (
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full flex items-center justify-center gap-2 py-3 px-6 rounded-md bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-bold text-sm shadow-xs transition-all cursor-pointer"
-              >
-                <PlusCircle className="w-4 h-4" />
-                <span>{loading ? 'Publishing...' : 'Publish Event Directly'}</span>
-              </button>
+              <div className="w-full flex flex-col gap-2.5">
+                <button
+                  type="button"
+                  id="btn-excel-file-batch-upload"
+                  onClick={() => setShowExcelBatchModal(true)}
+                  className="w-full flex items-center justify-center gap-2 py-3 px-6 rounded-md bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-sm shadow-xs transition-all cursor-pointer border border-emerald-800"
+                >
+                  <FileSpreadsheet className="w-4 h-4" />
+                  <span>Excel File Batch Upload</span>
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full flex items-center justify-center gap-2 py-3 px-6 rounded-md bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-bold text-sm shadow-xs transition-all cursor-pointer"
+                >
+                  <PlusCircle className="w-4 h-4" />
+                  <span>{loading ? 'Publishing...' : 'Publish Event Directly'}</span>
+                </button>
+              </div>
             ) : (
               <button
                 type="submit"
@@ -1371,6 +1387,18 @@ export const SubmitEventForm: React.FC<SubmitEventFormProps> = ({
           </div>
         </div>
       )}
+
+      {/* Excel File Batch Upload Modal */}
+      <ExcelBatchUploadModal
+        isOpen={showExcelBatchModal}
+        onClose={() => setShowExcelBatchModal(false)}
+        onSuccessUploaded={() => {
+          onSuccessNavigate();
+        }}
+        currentLang={currentLang}
+        authorId={authorId}
+        authorEmail={authorEmail}
+      />
 
     </div>
   );

@@ -1,13 +1,15 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ExternalLink, ChevronDown, Search, Facebook, Globe, Calendar, Coffee } from 'lucide-react';
-import { TangoEvent } from '../types';
+import { TangoEvent, SupportedLanguage } from '../types';
 import { resolveDirectSourceUrl, ResolvedEventLink } from '../utils/sourceUrlResolver';
+import { translations } from '../i18n';
 
 interface EventSourceLinkProps {
   event: TangoEvent;
   className?: string;
   showDropdown?: boolean;
   label?: string;
+  currentLang?: SupportedLanguage;
 }
 
 export const EventSourceLink: React.FC<EventSourceLinkProps> = ({
@@ -15,9 +17,11 @@ export const EventSourceLink: React.FC<EventSourceLinkProps> = ({
   className = '',
   showDropdown = true,
   label,
+  currentLang = 'en',
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const t = translations[currentLang] || translations.en;
 
   const resolved: ResolvedEventLink = resolveDirectSourceUrl({
     source_url: event.source_url,
@@ -65,7 +69,7 @@ export const EventSourceLink: React.FC<EventSourceLinkProps> = ({
     };
   }, [isOpen]);
 
-  const tooltipTitle = `크롤링 검증 웹사이트 바로가기: ${directVerifiedUrl}`;
+  const tooltipTitle = `${t.eventLinks.directVerifiedTooltip} ${directVerifiedUrl}`;
 
   return (
     <div className={`relative inline-flex items-center ${className}`} ref={menuRef}>
@@ -91,7 +95,7 @@ export const EventSourceLink: React.FC<EventSourceLinkProps> = ({
               e.stopPropagation();
               setIsOpen(!isOpen);
             }}
-            title="자료 바로가기 및 검색 옵션 더보기"
+            title={t.eventLinks.moreOptionsTooltip}
             className="p-0.5 text-gray-400 hover:text-gray-700 rounded hover:bg-gray-100 transition-colors cursor-pointer"
           >
             <ChevronDown className="w-2.5 h-2.5" />
@@ -101,8 +105,8 @@ export const EventSourceLink: React.FC<EventSourceLinkProps> = ({
           {isOpen && (
             <div className="absolute right-0 top-full mt-1 w-64 bg-white rounded-lg shadow-xl border border-gray-200 py-1 z-50 text-left text-xs font-normal animate-in fade-in zoom-in-95 duration-100">
               <div className="px-3 py-1.5 border-b border-gray-100 bg-gray-50/70">
-                <span className="text-[11px] font-bold text-gray-700 block">행사 자료 바로가기</span>
-                <span className="text-[10px] text-gray-500 truncate block">행사: {event.event_name}</span>
+                <span className="text-[11px] font-bold text-gray-700 block">{t.eventLinks.menuHeader}</span>
+                <span className="text-[10px] text-gray-500 truncate block">{t.eventLinks.eventLabel} {event.event_name}</span>
               </div>
 
               {/* Verified Crawled URL */}
@@ -116,7 +120,7 @@ export const EventSourceLink: React.FC<EventSourceLinkProps> = ({
                 >
                   <Globe className="w-3.5 h-3.5 text-red-600 shrink-0" />
                   <div className="min-w-0">
-                    <div className="font-semibold text-[11px] text-red-700">크롤링 검증 웹사이트 바로가기</div>
+                    <div className="font-semibold text-[11px] text-red-700">{t.eventLinks.officialWebsite}</div>
                     <div className="text-[10px] text-gray-500 truncate max-w-[190px]" title={directVerifiedUrl}>
                       {directVerifiedUrl}
                     </div>
@@ -135,7 +139,7 @@ export const EventSourceLink: React.FC<EventSourceLinkProps> = ({
                 >
                   <Coffee className="w-3.5 h-3.5 text-amber-600 shrink-0" />
                   <div>
-                    <div className="font-semibold text-[11px]">다음 카페 공식 공지/일정</div>
+                    <div className="font-semibold text-[11px]">{t.eventLinks.daumCafe}</div>
                     <div className="text-[10px] text-gray-500 truncate max-w-[180px]">{resolved.daumCafeUrl}</div>
                   </div>
                 </a>
@@ -152,8 +156,8 @@ export const EventSourceLink: React.FC<EventSourceLinkProps> = ({
                 >
                   <Calendar className="w-3.5 h-3.5 text-blue-600 shrink-0" />
                   <div>
-                    <div className="font-semibold text-[11px]">페이스북 그룹 이벤트 일정표</div>
-                    <div className="text-[10px] text-gray-500">예정된 밀롱가/행사 목록 바로보기</div>
+                    <div className="font-semibold text-[11px]">{t.eventLinks.fbCalendar}</div>
+                    <div className="text-[10px] text-gray-500">{t.eventLinks.fbCalendarDesc}</div>
                   </div>
                 </a>
               )}
@@ -169,8 +173,8 @@ export const EventSourceLink: React.FC<EventSourceLinkProps> = ({
                 >
                   <Facebook className="w-3.5 h-3.5 text-blue-500 shrink-0" />
                   <div>
-                    <div className="font-semibold text-[11px]">페이스북 그룹 홈/게시판</div>
-                    <div className="text-[10px] text-gray-500">공지글 및 최신 피드 확인</div>
+                    <div className="font-semibold text-[11px]">{t.eventLinks.fbFeed}</div>
+                    <div className="text-[10px] text-gray-500">{t.eventLinks.fbFeedDesc}</div>
                   </div>
                 </a>
               )}
@@ -186,8 +190,8 @@ export const EventSourceLink: React.FC<EventSourceLinkProps> = ({
                 >
                   <Search className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
                   <div>
-                    <div className="font-semibold text-[11px]">그룹 내 밀롱가 게시글 검색</div>
-                    <div className="text-[10px] text-gray-500">포스터 및 DJ 공지 검색</div>
+                    <div className="font-semibold text-[11px]">{t.eventLinks.fbSearch}</div>
+                    <div className="text-[10px] text-gray-500">{t.eventLinks.fbSearchDesc}</div>
                   </div>
                 </a>
               )}
@@ -202,8 +206,8 @@ export const EventSourceLink: React.FC<EventSourceLinkProps> = ({
               >
                 <Search className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                 <div>
-                  <div className="font-semibold text-[11px]">구글에서 행사 정보 검색</div>
-                  <div className="text-[10px] text-gray-500">외부 포스터, 신청폼, 블로그 찾기</div>
+                  <div className="font-semibold text-[11px]">{t.eventLinks.googleSearch}</div>
+                  <div className="text-[10px] text-gray-500">{t.eventLinks.googleSearchDesc}</div>
                 </div>
               </a>
 
@@ -218,7 +222,7 @@ export const EventSourceLink: React.FC<EventSourceLinkProps> = ({
                 >
                   <Globe className="w-3.5 h-3.5 text-gray-400 shrink-0" />
                   <div>
-                    <div className="font-semibold text-[11px]">출처 원문 주소</div>
+                    <div className="font-semibold text-[11px]">{t.eventLinks.originalSource}</div>
                     <div className="text-[10px] text-gray-400 truncate max-w-[180px]">{resolved.originalUrl}</div>
                   </div>
                 </a>

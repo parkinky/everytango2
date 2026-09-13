@@ -137,17 +137,17 @@ function MainAppContent() {
               <div className="relative z-10 w-full space-y-2">
                 <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-red-50 text-red-600 text-[11px] font-semibold border border-red-100">
                   <Compass className="w-3 h-3" />
-                  <span>Verified Tango Events Global Radar</span>
+                  <span>{t.hero.radarBadge}</span>
                 </div>
                 
-                {/* Dynamically controlled headline from SiteConfig / Gemini */}
+                {/* Dynamically controlled headline from SiteConfig / Gemini or localized tagline */}
                 <h1 className="text-2xl sm:text-3xl font-extrabold text-gray-900 tracking-tight leading-snug">
-                  {siteConfig.heroHeadline || t.tagline}
+                  {siteConfig.heroHeadline && siteConfig.heroHeadline !== 'Global Argentine Tango Events Radar' ? siteConfig.heroHeadline : t.tagline}
                 </h1>
                 
                 {/* Dynamically controlled subheadline (Max width constrained so photo starts cleanly after text) */}
                 <p className="text-xs sm:text-sm text-gray-600 leading-normal max-w-xs sm:max-w-md md:max-w-lg lg:max-w-xl">
-                  {siteConfig.heroSubheadline || t.subtagline}
+                  {siteConfig.heroSubheadline && siteConfig.heroSubheadline !== 'Discover and track festivals, marathons, encuentros, and milongas worldwide with automated multi-channel updates.' ? siteConfig.heroSubheadline : t.subtagline}
                 </p>
 
                 {/* Notice & Quick Metric Badges in One Full-Width Line (Right edge aligns with Export to Excel) */}
@@ -164,14 +164,14 @@ function MainAppContent() {
 
                   <div className="flex items-center gap-2 shrink-0">
                     <span className="py-1 px-2.5 rounded-md bg-gray-50/95 backdrop-blur-xs border border-gray-200 text-gray-700 whitespace-nowrap shrink-0">
-                      <strong className="text-gray-900 font-bold">{stats.totalApproved}</strong> Upcoming Events
+                      <strong className="text-gray-900 font-bold">{stats.totalApproved}</strong> {t.hero.upcomingEvents}
                     </span>
                     <span className="py-1 px-2.5 rounded-md bg-gray-50/95 backdrop-blur-xs border border-gray-200 text-gray-700 whitespace-nowrap shrink-0">
-                      <strong className="text-gray-900 font-bold">20+</strong> Countries
+                      <strong className="text-gray-900 font-bold">20+</strong> {t.hero.countries}
                     </span>
                     <span className="py-1 px-2.5 rounded-md bg-gray-50/95 backdrop-blur-xs border border-gray-200 text-gray-700 flex items-center gap-1.5 whitespace-nowrap shrink-0">
                       <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block"></span>
-                      <span>Auto-Crawled & Deduped</span>
+                      <span>{t.hero.autoCrawled}</span>
                     </span>
                   </div>
                 </div>
@@ -222,14 +222,14 @@ function MainAppContent() {
       <footer className="mt-auto border-t border-gray-200 bg-white py-4 text-xs text-gray-500">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-4 text-[11px] font-bold tracking-wider text-gray-400 uppercase">
-            <span>Crawler Active</span>
-            <span>API Status: Healthy</span>
-            <span>DB Synchronized</span>
+            <span>{t.footer.crawlerActive}</span>
+            <span>{t.footer.apiHealthy}</span>
+            <span>{t.footer.dbSync}</span>
           </div>
           <div className="flex items-center gap-4 text-xs">
             <div className="flex items-center gap-1.5 text-gray-600">
               <span className="w-2 h-2 rounded-full bg-green-500"></span>
-              <span>System Synchronized</span>
+              <span>{t.footer.dbSync}</span>
             </div>
             <span className="text-gray-300">·</span>
             <button onClick={() => handleOpenAuth('findId')} className="hover:text-gray-900 transition-colors">

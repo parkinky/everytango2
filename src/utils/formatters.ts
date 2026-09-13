@@ -75,14 +75,34 @@ const EXCHANGE_RATES_TO_USD: Record<string, number> = {
  * and converts it to equivalent US Dollars ($ USD).
  * When countryCode is 'JP' (Japan), accurately parses Japanese Yen and auto-corrects legacy crawler euro defaults.
  */
+const FREE_LABELS: Record<string, string> = {
+  en: 'Free($0)',
+  es: 'Gratis($0)',
+  ko: '무료($0)',
+  ja: '無料($0)',
+  zh: '免费($0)',
+};
+
+const DONATION_LABELS: Record<string, string> = {
+  en: 'Donation',
+  es: 'Donación',
+  ko: '자율 기부',
+  ja: '寄付/任意',
+  zh: '自愿赞助',
+};
+
 export function convertPriceToUSD(
   rawPrice: string | undefined | null,
   isFreeInput?: boolean,
-  countryCode?: string
+  countryCode?: string,
+  lang: string = 'en'
 ): ConvertedPrice {
+  const freeText = FREE_LABELS[lang] || FREE_LABELS.en;
+  const donationText = DONATION_LABELS[lang] || DONATION_LABELS.en;
+
   if (!rawPrice || isFreeInput) {
     return {
-      usdFormatted: 'Free($0)',
+      usdFormatted: freeText,
       originalFormatted: 'Free',
       approxUsd: 0,
       isFree: true,
@@ -100,9 +120,9 @@ export function convertPriceToUSD(
   const lower = str.toLowerCase();
 
   // Check free conditions
-  if (lower.includes('free') || lower.includes('무료') || lower === '0' || lower === '$0' || lower === '€0' || lower === '₩0' || lower === '¥0') {
+  if (lower.includes('free') || lower.includes('무료') || lower.includes('gratis') || lower.includes('無料') || lower.includes('免费') || lower === '0' || lower === '$0' || lower === '€0' || lower === '₩0' || lower === '¥0') {
     return {
-      usdFormatted: 'Free($0)',
+      usdFormatted: freeText,
       originalFormatted: str,
       approxUsd: 0,
       isFree: true,
@@ -110,9 +130,9 @@ export function convertPriceToUSD(
   }
 
   // Check donation / voluntary
-  if (lower.includes('donation') || lower.includes('기부') || lower.includes('voluntary')) {
+  if (lower.includes('donation') || lower.includes('기부') || lower.includes('donación') || lower.includes('voluntary') || lower.includes('寄付') || lower.includes('赞助')) {
     return {
-      usdFormatted: 'Donation',
+      usdFormatted: donationText,
       originalFormatted: str,
       approxUsd: 0,
       isFree: false,

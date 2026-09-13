@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import {
   collection,
   onSnapshot,
@@ -7,6 +7,7 @@ import {
   setDoc,
   deleteDoc,
   updateDoc,
+  writeBatch,
   query,
   where,
   orderBy,
@@ -45,6 +46,7 @@ interface EventsContextType {
   filteredEvents: TangoEvent[];
   submitEvent: (eventData: Omit<TangoEvent, 'id' | 'created_at' | 'status' | 'source_type'>) => Promise<{ success: boolean; id?: string; duplicateWarning?: string; error?: string }>;
   addEventDirect: (eventData: Omit<TangoEvent, 'id' | 'created_at'>) => Promise<{ success: boolean; id?: string; error?: string }>;
+  addMultipleEventsDirect: (eventsList: Omit<TangoEvent, 'id' | 'created_at'>[]) => Promise<{ success: boolean; addedCount: number; error?: string }>;
   approveEvent: (id: string, overrideEmail?: string) => Promise<{ success: boolean; emailSent?: boolean; emailRecipient?: string; emailLog?: EmailLog }>;
   rejectEvent: (id: string) => Promise<void>;
   deleteEvent: (id: string) => Promise<void>;
@@ -284,6 +286,17 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             existingIds.add(d.id);
           });
 
+          // Sort events by event start date ascending (Tie-breaks: city ascending -> end_date -> event_name)
+          list.sort((a, b) => {
+            const dateComp = (a.start_date || '').localeCompare(b.start_date || '');
+            if (dateComp !== 0) return dateComp;
+            const cityComp = (a.city || '').localeCompare(b.city || '', undefined, { sensitivity: 'base' });
+            if (cityComp !== 0) return cityComp;
+            const endComp = (a.end_date || '').localeCompare(b.end_date || '');
+            if (endComp !== 0) return endComp;
+            return (a.event_name || '').localeCompare(b.event_name || '');
+          });
+
           setEvents(list);
           localStorage.setItem('everytango_events', JSON.stringify(list));
         } else {
@@ -313,78 +326,95 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setFilters({ ...defaultFilters });
   };
 
-  // Filter application
-  const filteredEvents = events.filter((ev) => {
-    // Only approved events appear on public listing
-    if (ev.status !== 'APPROVED') return false;
+  // Filter application & Date Ascending Sorting (모든 조회화면은 event date 오름차순으로 정렬)
+  const filteredEvents = useMemo(() => {
+    return events
+      .filter((ev) => {
+        // Only approved events appear on public listing
+        if (ev.status !== 'APPROVED') return false;
 
-    // Search text filter (Event Name, auto-complete & fuzzy keyword)
-    if (filters.search) {
-      const q = filters.search.toLowerCase().trim();
-      const matchName = ev.event_name.toLowerCase().includes(q);
-      const matchCity = ev.city.toLowerCase().includes(q);
-      const matchNotes = ev.notes?.toLowerCase().includes(q);
-      if (!matchName && !matchCity && !matchNotes) return false;
-    }
+        // Search text filter (Event Name, auto-complete & fuzzy keyword)
+        if (filters.search) {
+          const q = filters.search.toLowerCase().trim();
+          const matchName = ev.event_name.toLowerCase().includes(q);
+          const matchCity = ev.city.toLowerCase().includes(q);
+          const matchNotes = ev.notes?.toLowerCase().includes(q);
+          if (!matchName && !matchCity && !matchNotes) return false;
+        }
 
-    // Type filter
-    if (filters.types.length > 0) {
-      if (!filters.types.includes(ev.event_type)) return false;
-    }
+        // Type filter
+        if (filters.types.length > 0) {
+          if (!filters.types.includes(ev.event_type)) return false;
+        }
 
-    // Country filter
-    if (filters.country_code && filters.country_code !== 'ALL') {
-      if (ev.country_code !== filters.country_code) return false;
-    }
+        // Country filter
+        if (filters.country_code && filters.country_code !== 'ALL') {
+          if (ev.country_code !== filters.country_code) return false;
+        }
 
-    // City filter
-    if (filters.city) {
-      if (!ev.city.toLowerCase().includes(filters.city.toLowerCase().trim())) return false;
-    }
+        // City filter
+        if (filters.city) {
+          if (!ev.city.toLowerCase().includes(filters.city.toLowerCase().trim())) return false;
+        }
 
-    // State filter
-    if (filters.state) {
-      if (!ev.state?.toLowerCase().includes(filters.state.toLowerCase().trim())) return false;
-    }
+        // State filter
+        if (filters.state) {
+          if (!ev.state?.toLowerCase().includes(filters.state.toLowerCase().trim())) return false;
+        }
 
-    // Price filter (Free vs Paid)
-    if (filters.price_filter === 'free') {
-      const isFree = ev.is_free || ev.price.toLowerCase().includes('free') || ev.price === '0';
-      if (!isFree) return false;
-    } else if (filters.price_filter === 'paid') {
-      const isFree = ev.is_free || ev.price.toLowerCase().includes('free') || ev.price === '0';
-      if (isFree) return false;
-    }
+        // Price filter (Free vs Paid)
+        if (filters.price_filter === 'free') {
+          const isFree = ev.is_free || ev.price.toLowerCase().includes('free') || ev.price === '0';
+          if (!isFree) return false;
+        } else if (filters.price_filter === 'paid') {
+          const isFree = ev.is_free || ev.price.toLowerCase().includes('free') || ev.price === '0';
+          if (isFree) return false;
+        }
 
-    // Date range filtering
-    // Today's date reference
-    const today = new Date();
-    const todayStr = today.toISOString().split('T')[0];
+        // Date range filtering
+        // Today's date reference (using local date YYYY-MM-DD)
+        const now = new Date();
+        const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
-    // Compute range based on quick range or custom
-    if (filters.date_quick_range === '1m') {
-      const target = new Date();
-      target.setMonth(target.getMonth() + 1);
-      const targetStr = target.toISOString().split('T')[0];
-      if (ev.start_date < todayStr || ev.start_date > targetStr) return false;
-    } else if (filters.date_quick_range === '3m') {
-      const target = new Date();
-      target.setMonth(target.getMonth() + 3);
-      const targetStr = target.toISOString().split('T')[0];
-      if (ev.start_date < todayStr || ev.start_date > targetStr) return false;
-    } else if (filters.date_quick_range === '6m') {
-      // Default: today to today+6 months
-      const target = new Date();
-      target.setMonth(target.getMonth() + 6);
-      const targetStr = target.toISOString().split('T')[0];
-      if (ev.start_date < todayStr || ev.start_date > targetStr) return false;
-    } else if (filters.date_quick_range === 'custom') {
-      if (filters.start_date && ev.start_date < filters.start_date) return false;
-      if (filters.end_date && ev.end_date > filters.end_date) return false;
-    }
+        const getTargetDateStr = (monthsToAdd: number) => {
+          const target = new Date(now);
+          target.setMonth(target.getMonth() + monthsToAdd);
+          return `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(target.getDate()).padStart(2, '0')}`;
+        };
 
-    return true;
-  });
+        // Event is considered ended if its end_date (or start_date if no end_date) is before today
+        const eventEndDate = ev.end_date || ev.start_date;
+
+        // Compute range based on quick range or custom
+        if (filters.date_quick_range === '1m') {
+          const targetStr = getTargetDateStr(1);
+          if (eventEndDate < todayStr || ev.start_date > targetStr) return false;
+        } else if (filters.date_quick_range === '3m') {
+          const targetStr = getTargetDateStr(3);
+          if (eventEndDate < todayStr || ev.start_date > targetStr) return false;
+        } else if (filters.date_quick_range === '6m') {
+          const targetStr = getTargetDateStr(6);
+          if (eventEndDate < todayStr || ev.start_date > targetStr) return false;
+        } else if (filters.date_quick_range === 'all') {
+          // "ALL Upcoming": show all events from today onwards into the future
+          if (eventEndDate < todayStr) return false;
+        } else if (filters.date_quick_range === 'custom') {
+          if (filters.start_date && eventEndDate < filters.start_date) return false;
+          if (filters.end_date && ev.start_date > filters.end_date) return false;
+        }
+
+        return true;
+      })
+      .sort((a, b) => {
+        const dateComp = (a.start_date || '').localeCompare(b.start_date || '');
+        if (dateComp !== 0) return dateComp;
+        const cityComp = (a.city || '').localeCompare(b.city || '', undefined, { sensitivity: 'base' });
+        if (cityComp !== 0) return cityComp;
+        const endComp = (a.end_date || '').localeCompare(b.end_date || '');
+        if (endComp !== 0) return endComp;
+        return (a.event_name || '').localeCompare(b.event_name || '');
+      });
+  }, [events, filters]);
 
   // Submit new event (Workflow: Saved as PENDING for admin review)
   const submitEvent = async (
@@ -622,6 +652,57 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       return { success: true, id: newId };
     } catch (err: any) {
       return { success: false, error: err.message || 'Failed to add event' };
+    }
+  };
+
+  const addMultipleEventsDirect = async (
+    eventsList: Omit<TangoEvent, 'id' | 'created_at'>[]
+  ): Promise<{ success: boolean; addedCount: number; error?: string }> => {
+    if (!eventsList || eventsList.length === 0) {
+      return { success: true, addedCount: 0 };
+    }
+    try {
+      const nowIso = new Date().toISOString();
+      const newEvents: TangoEvent[] = [];
+
+      // Generate unique IDs and full TangoEvent objects
+      eventsList.forEach((item, index) => {
+        const uniqueId = 'evt_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7) + '_' + index;
+        newEvents.push({
+          ...item,
+          id: uniqueId,
+          created_at: nowIso,
+        });
+      });
+
+      // Write to Firestore in batches (max 450 items per writeBatch)
+      try {
+        const batchSize = 450;
+        for (let i = 0; i < newEvents.length; i += batchSize) {
+          const chunk = newEvents.slice(i, i + batchSize);
+          const batch = writeBatch(db);
+          chunk.forEach((ev) => {
+            batch.set(doc(db, 'events', ev.id), ev);
+          });
+          await batch.commit();
+        }
+      } catch (err) {
+        console.warn('Batch firestore commit warning, attempting parallel setDocs:', err);
+        await Promise.allSettled(
+          newEvents.map((ev) => setDoc(doc(db, 'events', ev.id), ev))
+        );
+      }
+
+      // Update state and localStorage
+      setEvents((prev) => {
+        const updated = [...newEvents, ...prev];
+        localStorage.setItem('everytango_events', JSON.stringify(updated));
+        return updated;
+      });
+
+      return { success: true, addedCount: newEvents.length };
+    } catch (err: any) {
+      return { success: false, addedCount: 0, error: err.message || 'Failed to batch add events' };
     }
   };
 
@@ -1059,6 +1140,7 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         filteredEvents,
         submitEvent,
         addEventDirect,
+        addMultipleEventsDirect,
         approveEvent,
         rejectEvent,
         deleteEvent,

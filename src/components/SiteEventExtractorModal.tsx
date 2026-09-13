@@ -109,10 +109,17 @@ export const SiteEventExtractorModal: React.FC<SiteEventExtractorModalProps> = (
         setSubSitesSearched(data.subSitesSearched);
       }
       if (data.events && Array.isArray(data.events) && data.events.length > 0) {
-        setExtractedList(data.events);
+        const sortedEvents = [...data.events].sort((a: ExtractedSiteEvent, b: ExtractedSiteEvent) => {
+          const dComp = (a.startDate || '').localeCompare(b.startDate || '');
+          if (dComp !== 0) return dComp;
+          const cComp = (a.city || '').localeCompare(b.city || '');
+          if (cComp !== 0) return cComp;
+          return (a.eventName || '').localeCompare(b.eventName || '');
+        });
+        setExtractedList(sortedEvents);
         // Preselect all non-duplicate events
         const initialSelected: number[] = [];
-        data.events.forEach((ev: ExtractedSiteEvent, idx: number) => {
+        sortedEvents.forEach((ev: ExtractedSiteEvent, idx: number) => {
           const dup = isDuplicateEvent(
             {
               event_name: ev.eventName,
@@ -172,9 +179,16 @@ export const SiteEventExtractorModal: React.FC<SiteEventExtractorModalProps> = (
 
       const data = await resp.json();
       if (data.events && Array.isArray(data.events) && data.events.length > 0) {
-        setExtractedList(data.events);
+        const sortedEvents = [...data.events].sort((a: ExtractedSiteEvent, b: ExtractedSiteEvent) => {
+          const dComp = (a.startDate || '').localeCompare(b.startDate || '');
+          if (dComp !== 0) return dComp;
+          const cComp = (a.city || '').localeCompare(b.city || '');
+          if (cComp !== 0) return cComp;
+          return (a.eventName || '').localeCompare(b.eventName || '');
+        });
+        setExtractedList(sortedEvents);
         const initialSelected: number[] = [];
-        data.events.forEach((ev: ExtractedSiteEvent, idx: number) => {
+        sortedEvents.forEach((ev: ExtractedSiteEvent, idx: number) => {
           const dup = isDuplicateEvent(
             {
               event_name: ev.eventName,

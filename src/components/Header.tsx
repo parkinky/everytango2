@@ -80,7 +80,8 @@ export const Header: React.FC<HeaderProps> = ({
                   : 'text-gray-500 hover:text-gray-900'
               }`}
             >
-              <span className="whitespace-nowrap">Upload Event Manually +</span>
+              <PlusCircle className="w-4 h-4 text-red-600" />
+              <span className="whitespace-nowrap">{t.nav.submitEvent}</span>
             </button>
           </nav>
 

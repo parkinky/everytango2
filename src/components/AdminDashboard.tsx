@@ -123,8 +123,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
   // --- EVENTS TAB STATE ---
   const [eventFilterStatus, setEventFilterStatus] = useState<'ALL' | 'PENDING' | 'APPROVED' | 'REJECTED'>('ALL');
   const [eventSearchQuery, setEventSearchQuery] = useState('');
-  const [adminEventSortField, setAdminEventSortField] = useState<'created_at' | 'start_date' | 'event_name'>('created_at');
-  const [adminEventSortAsc, setAdminEventSortAsc] = useState<boolean>(false);
+  const [adminEventSortField, setAdminEventSortField] = useState<'created_at' | 'start_date' | 'event_name'>('start_date');
+  const [adminEventSortAsc, setAdminEventSortAsc] = useState<boolean>(true);
   const [selectedEventIds, setSelectedEventIds] = useState<Set<string>>(new Set());
   const [isAddEventModalOpen, setIsAddEventModalOpen] = useState(false);
   const [newEventForm, setNewEventForm] = useState({
@@ -1014,7 +1014,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
     return true;
   });
 
-  // Sort events for Admin Event Management tab
+  // Sort events for Admin Event Management tab (기본: Event Date 오름차순 정렬)
   const sortedEventsForAdmin = useMemo(() => {
     return [...filteredEventsForAdmin].sort((a, b) => {
       let valA = '';
@@ -1031,7 +1031,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
       }
       if (valA < valB) return adminEventSortAsc ? -1 : 1;
       if (valA > valB) return adminEventSortAsc ? 1 : -1;
-      return 0;
+
+      // Secondary tie-breaks: If start_date is the same, sort by city/location ascending, then end_date, then event_name
+      if (adminEventSortField === 'start_date') {
+        const cityComp = (a.city || '').localeCompare(b.city || '', undefined, { sensitivity: 'base' });
+        if (cityComp !== 0) return cityComp;
+        const endComp = (a.end_date || '').localeCompare(b.end_date || '');
+        if (endComp !== 0) return endComp;
+        return (a.event_name || '').localeCompare(b.event_name || '');
+      } else {
+        // If sorting by created_at or event_name is tied, tiebreak by start_date ascending
+        const dateComp = (a.start_date || '').localeCompare(b.start_date || '');
+        if (dateComp !== 0) return dateComp;
+        return (a.event_name || '').localeCompare(b.event_name || '');
+      }
     });
   }, [filteredEventsForAdmin, adminEventSortField, adminEventSortAsc]);
 
@@ -1507,8 +1520,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                     >
                       <div className="flex items-center gap-1">
                         <span>Date</span>
-                        {adminEventSortField === 'start_date' && (
+                        {adminEventSortField === 'start_date' ? (
                           <span className="text-red-600 font-bold">{adminEventSortAsc ? '↑' : '↓'}</span>
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-gray-400" />
                         )}
                       </div>
                     </th>
@@ -1552,8 +1567,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                     >
                       <div className="flex items-center gap-1">
                         <span>Event Name</span>
-                        {adminEventSortField === 'event_name' && (
+                        {adminEventSortField === 'event_name' ? (
                           <span className="text-red-600 font-bold">{adminEventSortAsc ? '↑' : '↓'}</span>
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 text-gray-400" />
                         )}
                       </div>
                     </th>
@@ -1929,7 +1946,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block font-semibold text-gray-700 mb-1">Country Code (2-letters) *</label>
                       <select
@@ -1949,17 +1966,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                       </select>
                     </div>
                     <div>
-                      <label className="block font-semibold text-gray-700 mb-1">City *</label>
-                      <input
-                        type="text"
-                        required
-                        value={newEventForm.city}
-                        onChange={(e) => setNewEventForm({ ...newEventForm, city: e.target.value })}
-                        placeholder="Seoul"
-                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:bg-white focus:border-red-600"
-                      />
-                    </div>
-                    <div>
                       <label className="block font-semibold text-gray-700 mb-1">Price</label>
                       <input
                         type="text"
@@ -1972,14 +1978,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-gray-700 mb-1">Street Address</label>
+                    <label className="block font-semibold text-gray-700 mb-1">Address (Street)</label>
                     <input
                       type="text"
                       value={newEventForm.address}
                       onChange={(e) => setNewEventForm({ ...newEventForm, address: e.target.value })}
-                      placeholder="Gangnam Tango Studio, Seoul"
+                      placeholder="Gangnam Tango Studio, 123 Teheran-ro"
                       className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:bg-white focus:border-red-600"
                     />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block font-semibold text-gray-700 mb-1">City *</label>
+                      <input
+                        type="text"
+                        required
+                        value={newEventForm.city}
+                        onChange={(e) => setNewEventForm({ ...newEventForm, city: e.target.value })}
+                        placeholder="Seoul"
+                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:bg-white focus:border-red-600"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-gray-700 mb-1">State / Province</label>
+                      <input
+                        type="text"
+                        value={newEventForm.state}
+                        onChange={(e) => setNewEventForm({ ...newEventForm, state: e.target.value })}
+                        placeholder="e.g. GA, Seoul"
+                        className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-900 focus:bg-white focus:border-red-600"
+                      />
+                    </div>
                   </div>
 
                   <div>

@@ -30,6 +30,7 @@ import {
 import { isDuplicateEvent, formatDateRange } from '../utils/dedup';
 import { formatDateToCST } from '../utils/formatters';
 import { resolveDirectSourceUrl } from '../utils/sourceUrlResolver';
+import { translateEventNotes } from '../utils/notesTranslator';
 
 interface FacebookSearchModalProps {
   isOpen: boolean;
@@ -86,6 +87,17 @@ export const FacebookSearchModal: React.FC<FacebookSearchModalProps> = ({
       return true;
     });
   }, [regionFilter, communitySearchQuery]);
+
+  // Sort scanned events by event start date ascending
+  const sortedScannedEvents = useMemo(() => {
+    return [...scannedEvents].sort((a, b) => {
+      const dateComp = (a.start_date || '').localeCompare(b.start_date || '');
+      if (dateComp !== 0) return dateComp;
+      const cityComp = (a.city || '').localeCompare(b.city || '', undefined, { sensitivity: 'base' });
+      if (cityComp !== 0) return cityComp;
+      return (a.event_name || '').localeCompare(b.event_name || '');
+    });
+  }, [scannedEvents]);
 
   // Scan specific community events
   const handleSelectCommunity = (comm: FacebookCommunity) => {
@@ -699,13 +711,13 @@ export const FacebookSearchModal: React.FC<FacebookSearchModalProps> = ({
               )}
             </div>
 
-            {scannedEvents.length === 0 ? (
+            {sortedScannedEvents.length === 0 ? (
               <div className="py-10 text-center text-xs text-stone-400">
                 {fbT.noEventsFound}
               </div>
             ) : (
               <div className="space-y-2.5">
-                {scannedEvents.map((ev, idx) => {
+                {sortedScannedEvents.map((ev, idx) => {
                   const key = `${ev.event_name}_${ev.start_date}`;
                   const isJustAdded = addedIds[key];
 
@@ -787,11 +799,14 @@ export const FacebookSearchModal: React.FC<FacebookSearchModalProps> = ({
                           </span>
                         </div>
 
-                        {ev.notes && (
-                          <p className="text-[11px] text-stone-400 dark:text-stone-500 italic line-clamp-1">
-                            {ev.notes}
-                          </p>
-                        )}
+                        {ev.notes && (() => {
+                          const translated = translateEventNotes(ev.notes, currentLang);
+                          return (
+                            <p className="text-[11px] text-stone-400 dark:text-stone-500 italic line-clamp-1" title={translated}>
+                              {translated}
+                            </p>
+                          );
+                        })()}
                       </div>
 
                       {/* Actions */}

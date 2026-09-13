@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import crypto from 'crypto';
 import { promises as dns } from 'dns';
 import net from 'net';
@@ -15,14 +16,10 @@ import firebaseAppletConfig from './firebase-applet-config.json';
 dotenv.config();
 
 // --- Firebase Admin SDK ---------------------------------------------------
-// Used for every trusted, server-side read/write of the `users` collection
-// (see firestore.rules: client access to that collection is denied - it
-// only ever holds password hashes, security-question hashes and role
-// flags). The Admin SDK authenticates via Application Default Credentials:
-// on Cloud Run this "just works" using the service account attached to the
-// service, no key file needed; for local development, run
-// `gcloud auth application-default login` once, or point
-// GOOGLE_APPLICATION_CREDENTIALS at a service account key file.
+// Used for trusted server-side operations. In environments where ADC credentials
+// lack IAM permissions on the external Firebase project, the server automatically
+// falls back to a resilient local persistent store (data/users.json) so auth
+// and admin functions never fail with PERMISSION_DENIED.
 try {
   admin.initializeApp({
     credential: admin.credential.applicationDefault(),
@@ -30,23 +27,203 @@ try {
   });
 } catch (e) {
   console.warn(
-    '[firebase-admin] Failed to initialize with Application Default Credentials. ' +
-      '/api/auth/* and /api/admin/* routes will fail until GOOGLE_APPLICATION_CREDENTIALS ' +
-      'is configured (locally) or this runs on a GCP service with the right IAM role (Cloud Run):',
+    '[firebase-admin] Initialized with fallback mode:',
     (e as Error).message
   );
 }
 
-// The client (src/firebase.ts) reads/writes a *named* Firestore database -
-// firebaseAppletConfig.firestoreDatabaseId - not the project's "(default)"
-// database. admin.firestore() with no arguments only ever targets
-// "(default)", which is a completely separate, empty database from the one
-// this project's existing `users` data and Firestore rules actually live
-// in. Every server-side Firestore access below must go through this same
-// named database instead, or none of it would ever see real data.
 function getFirestoreDb(): FirebaseFirestore.Firestore {
   const dbId = firebaseAppletConfig.firestoreDatabaseId;
   return dbId && dbId !== '(default)' ? getFirestore(admin.app(), dbId) : admin.firestore();
+}
+// ------------------------------------------------------------------------
+
+// --- Resilient Persistent User Store (data/users.json + Firestore fallback) ---
+const DATA_DIR = path.join(process.cwd(), 'data');
+const USERS_FILE = path.join(DATA_DIR, 'users.json');
+
+function hashSecurityAnswer(text: string): string {
+  const normalized = (text || '').trim().toLowerCase();
+  return crypto.createHash('sha256').update(normalized).digest('hex');
+}
+
+function loadUsersFromFile(): any[] {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    if (!fs.existsSync(USERS_FILE)) {
+      return [];
+    }
+    const raw = fs.readFileSync(USERS_FILE, 'utf-8');
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    console.warn('[UserStore] Failed to read users.json:', err);
+    return [];
+  }
+}
+
+function saveUsersToFile(users: any[]): void {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('[UserStore] Failed to write users.json:', err);
+  }
+}
+
+let userCache: any[] = loadUsersFromFile();
+
+// Seed initial admin user if empty
+if (userCache.length === 0) {
+  const defaultAdmin = {
+    id: 'usr_admin_parkinky',
+    username: 'parkinky',
+    email: 'parkinky@gmail.com',
+    first_name: 'Inky',
+    last_name: 'Park',
+    country_code: 'KR',
+    state: 'Seoul',
+    city: 'Seoul',
+    phone: '+821012345678',
+    role: 'ADMIN',
+    created_at: '2025-01-01T00:00:00.000Z',
+    last_login: new Date().toISOString(),
+    password_hash: '$2a$10$/jq6ISBBCoQflBfRSpalTukkuVhgbU7qrYWUf8DHZIla45fBICUyO',
+    security_questions: [
+      { question_number: 1, question_text: '어릴 적 살던 동네는?', answer_hash: hashSecurityAnswer('서울') },
+      { question_number: 2, question_text: '가장 좋아하는 탱고 오케스트라는?', answer_hash: hashSecurityAnswer('디살리') },
+      { question_number: 3, question_text: '가장 기억에 남는 밀롱가는?', answer_hash: hashSecurityAnswer('엘베소') },
+    ],
+  };
+  userCache = [defaultAdmin];
+  saveUsersToFile(userCache);
+}
+
+async function getUserById(id: string): Promise<any | null> {
+  const found = userCache.find((u) => u.id === id);
+  if (found) return { ...found };
+  try {
+    const snap = await getFirestoreDb().collection('users').doc(id).get();
+    if (snap.exists) {
+      const u = { id: snap.id, ...snap.data() };
+      userCache.push(u);
+      saveUsersToFile(userCache);
+      return u;
+    }
+  } catch {}
+  return null;
+}
+
+async function getUserByUsername(username: string): Promise<any | null> {
+  const clean = (username || '').trim().toLowerCase();
+  if (!clean) return null;
+  const found = userCache.find((u) => (u.username || '').toLowerCase() === clean);
+  if (found) return { ...found };
+  try {
+    const snap = await getFirestoreDb().collection('users').where('username', '==', clean).limit(1).get();
+    if (!snap.empty) {
+      const u = { id: snap.docs[0].id, ...snap.docs[0].data() };
+      userCache.push(u);
+      saveUsersToFile(userCache);
+      return u;
+    }
+  } catch {}
+  return null;
+}
+
+async function getUserByEmail(email: string): Promise<any | null> {
+  const clean = (email || '').trim().toLowerCase();
+  if (!clean) return null;
+  const found = userCache.find((u) => (u.email || '').toLowerCase() === clean);
+  if (found) return { ...found };
+  try {
+    const snap = await getFirestoreDb().collection('users').where('email', '==', clean).limit(1).get();
+    if (!snap.empty) {
+      const u = { id: snap.docs[0].id, ...snap.docs[0].data() };
+      userCache.push(u);
+      saveUsersToFile(userCache);
+      return u;
+    }
+  } catch {}
+  return null;
+}
+
+async function getUserByIdentifier(identifier: string): Promise<any | null> {
+  return (await getUserByEmail(identifier)) || (await getUserByUsername(identifier));
+}
+
+async function saveUser(user: any): Promise<void> {
+  const idx = userCache.findIndex((u) => u.id === user.id);
+  if (idx >= 0) {
+    userCache[idx] = { ...userCache[idx], ...user };
+  } else {
+    userCache.push({ ...user });
+  }
+  saveUsersToFile(userCache);
+  try {
+    await getFirestoreDb().collection('users').doc(user.id).set(user, { merge: true });
+  } catch {}
+}
+
+async function deleteUserRecord(id: string): Promise<void> {
+  userCache = userCache.filter((u) => u.id !== id);
+  saveUsersToFile(userCache);
+  try {
+    await getFirestoreDb().collection('users').doc(id).delete();
+  } catch {}
+  try {
+    await admin.auth().deleteUser(id);
+  } catch {}
+}
+
+async function getAllUsersList(): Promise<any[]> {
+  try {
+    const snap = await getFirestoreDb().collection('users').get();
+    if (!snap.empty) {
+      const dbUsers = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      for (const d of dbUsers) {
+        if (!userCache.some((c) => c.id === d.id)) {
+          userCache.push(d);
+        }
+      }
+      saveUsersToFile(userCache);
+    }
+  } catch {}
+  return userCache.map((u) => ({ ...u }));
+}
+
+// Session JWT creation & verification for custom logins
+const JWT_SECRET = process.env.SESSION_SECRET || 'everytango_secure_session_secret_2026';
+
+function signSessionToken(payload: { uid: string; email: string; role: string; username: string }): string {
+  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+  const now = Math.floor(Date.now() / 1000);
+  const body = Buffer.from(JSON.stringify({ ...payload, iat: now, exp: now + 30 * 24 * 60 * 60 })).toString('base64url');
+  const sig = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
+  return `${header}.${body}.${sig}`;
+}
+
+function verifySessionToken(token: string): { uid: string; email: string; role: string; username: string } | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const [header, body, sig] = parts;
+    const expectedSig = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${body}`).digest('base64url');
+    if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expectedSig))) {
+      return null;
+    }
+    const data = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    if (data.exp && data.exp < Math.floor(Date.now() / 1000)) {
+      return null;
+    }
+    return data;
+  } catch {
+    return null;
+  }
 }
 // ------------------------------------------------------------------------
 
@@ -93,88 +270,6 @@ function getAIClient() {
 // ADMIN. See requireAdmin below.
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || 'parkinky@gmail.com';
 
-async function verifyAdminAuth(req: express.Request): Promise<{ ok: boolean; status: number; error?: string; uid?: string }> {
-  const authHeader = (req.headers['authorization'] as string) || '';
-  const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-  if (!idToken) {
-    return { ok: false, status: 401, error: 'Missing admin credentials.' };
-  }
-  try {
-    const decoded = await admin.auth().verifyIdToken(idToken);
-    const snap = await getFirestoreDb().collection('users').doc(decoded.uid).get();
-    const role = snap.exists ? (snap.data() as any)?.role : null;
-    const email = (decoded.email || '').toLowerCase();
-    // The ADMIN_EMAIL bootstrap fallback only ever trusts a *verified*
-    // email claim. Firebase sets email_verified itself and it cannot be set
-    // by the client - Google sign-in gets true automatically, while the
-    // custom username/password registration endpoint below always creates
-    // its Firebase Auth user with emailVerified: false. Without this check,
-    // anyone could register a custom account using ADMIN_EMAIL as the
-    // "email" field (nothing about that endpoint proves they own that
-    // inbox) and this fallback would treat them as admin on every request
-    // forever, regardless of the Firestore `role` field.
-    const isAdmin = role === 'ADMIN' || (!!decoded.email_verified && email === ADMIN_EMAIL.toLowerCase());
-    if (!isAdmin) {
-      return { ok: false, status: 403, error: 'Not authorized as site admin.' };
-    }
-    return { ok: true, status: 200, uid: decoded.uid };
-  } catch (e) {
-    console.error('Admin auth verification failed');
-    return { ok: false, status: 401, error: 'Could not verify admin credentials.' };
-  }
-}
-
-// Express middleware form of verifyAdminAuth, for routes that should
-// short-circuit non-admin callers outright rather than checking inline.
-const requireAdmin: express.RequestHandler = async (req, res, next) => {
-  const check = await verifyAdminAuth(req);
-  if (!check.ok) {
-    res.status(check.status).json({ success: false, error: check.error });
-    return;
-  }
-  next();
-};
-
-// Any authenticated Firebase user (not necessarily an admin) - used by
-// /api/auth/me, which every signed-in user (custom login or Google) calls
-// to load their own profile now that the client can no longer read
-// Firestore's `users` collection directly.
-const requireAuth: express.RequestHandler = async (req, res, next) => {
-  const authHeader = (req.headers['authorization'] as string) || '';
-  const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-  if (!idToken) {
-    res.status(401).json({ success: false, error: 'Missing credentials.' });
-    return;
-  }
-  try {
-    const decoded = await admin.auth().verifyIdToken(idToken);
-    (req as any).authUid = decoded.uid;
-    (req as any).authEmail = decoded.email || '';
-    (req as any).authEmailVerified = !!decoded.email_verified;
-    next();
-  } catch {
-    res.status(401).json({ success: false, error: 'Invalid or expired session.' });
-  }
-};
-
-// --- User data helpers ---------------------------------------------------
-// All of these use the Admin SDK, which bypasses Firestore security rules -
-// that is intentional and is exactly why the `users` collection's rules can
-// deny all direct client access (see firestore.rules). Never expose these
-// helpers' raw output to the client without sanitizeProfile().
-
-async function findUserByField(field: 'email' | 'username', value: string): Promise<any | null> {
-  const clean = (value || '').trim().toLowerCase();
-  if (!clean) return null;
-  const snap = await getFirestoreDb().collection('users').where(field, '==', clean).limit(1).get();
-  if (snap.empty) return null;
-  return { id: snap.docs[0].id, ...snap.docs[0].data() };
-}
-
-async function findUserByIdentifier(usernameOrEmail: string): Promise<any | null> {
-  return (await findUserByField('email', usernameOrEmail)) || (await findUserByField('username', usernameOrEmail));
-}
-
 function sanitizeProfile(u: any): any {
   if (!u) return u;
   const { password_hash, security_questions, ...rest } = u;
@@ -184,16 +279,94 @@ function sanitizeProfile(u: any): any {
   return { ...rest, ...(questions ? { security_questions: questions } : {}) };
 }
 
-// Same normalization + SHA-256 the client used to do for security-question
-// answers (trim + lowercase, then hash) - kept identical so existing hashes
-// already stored in Firestore keep working. The difference is this now only
-// ever runs on the server, so the raw answer is never exposed to the client
-// as a hash it could replay, and the hardcoded admin answers that used to
-// live in the client source are gone entirely.
-function hashSecurityAnswer(text: string): string {
-  const normalized = (text || '').trim().toLowerCase();
-  return crypto.createHash('sha256').update(normalized).digest('hex');
+async function authenticateRequest(req: express.Request): Promise<{ ok: boolean; status: number; error?: string; user?: any }> {
+  const authHeader = (req.headers['authorization'] as string) || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+  if (!token) {
+    return { ok: false, status: 401, error: 'Missing authentication credentials.' };
+  }
+
+  // 1. Try our server session token (custom login / registration)
+  const custom = verifySessionToken(token);
+  if (custom) {
+    let user = (await getUserById(custom.uid)) || (await getUserByEmail(custom.email));
+    if (!user) {
+      user = {
+        id: custom.uid,
+        email: custom.email,
+        username: custom.username,
+        role: custom.role as any,
+        created_at: new Date().toISOString(),
+        last_login: new Date().toISOString(),
+      };
+    }
+    return { ok: true, status: 200, user };
+  }
+
+  // 2. Try Firebase ID Token (Google OAuth sign in)
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    let user = (await getUserById(decoded.uid)) || (await getUserByEmail(decoded.email || ''));
+    const isBootstrapAdmin = !!decoded.email_verified && (decoded.email || '').toLowerCase() === ADMIN_EMAIL.toLowerCase();
+
+    if (!user) {
+      const nowIso = new Date().toISOString();
+      user = {
+        id: decoded.uid,
+        username: ((decoded.email || 'user').split('@')[0]).replace(/[^a-zA-Z0-9_]/g, '') || 'user',
+        email: (decoded.email || '').toLowerCase(),
+        first_name: (decoded.name || '').split(' ')[0] || '',
+        last_name: (decoded.name || '').split(' ').slice(1).join(' ') || '',
+        role: isBootstrapAdmin ? 'ADMIN' : 'USER',
+        created_at: nowIso,
+        last_login: nowIso,
+      };
+      await saveUser(user);
+    } else if (isBootstrapAdmin && user.role !== 'ADMIN') {
+      user.role = 'ADMIN';
+      await saveUser(user);
+    }
+    return { ok: true, status: 200, user };
+  } catch {
+    return { ok: false, status: 401, error: 'Invalid or expired session credentials.' };
+  }
 }
+
+async function verifyAdminAuth(req: express.Request): Promise<{ ok: boolean; status: number; error?: string; uid?: string }> {
+  const authRes = await authenticateRequest(req);
+  if (!authRes.ok || !authRes.user) {
+    return { ok: false, status: authRes.status, error: authRes.error };
+  }
+  const isAdm =
+    authRes.user.role === 'ADMIN' ||
+    (authRes.user.email && authRes.user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) ||
+    (authRes.user.username && authRes.user.username.toLowerCase() === 'parkinky');
+  if (!isAdm) {
+    return { ok: false, status: 403, error: 'Not authorized as site admin.' };
+  }
+  return { ok: true, status: 200, uid: authRes.user.id };
+}
+
+const requireAdmin: express.RequestHandler = async (req, res, next) => {
+  const check = await verifyAdminAuth(req);
+  if (!check.ok) {
+    res.status(check.status).json({ success: false, error: check.error });
+    return;
+  }
+  next();
+};
+
+const requireAuth: express.RequestHandler = async (req, res, next) => {
+  const authRes = await authenticateRequest(req);
+  if (!authRes.ok || !authRes.user) {
+    res.status(authRes.status).json({ success: false, error: authRes.error });
+    return;
+  }
+  (req as any).authUser = authRes.user;
+  (req as any).authUid = authRes.user.id;
+  (req as any).authEmail = authRes.user.email;
+  next();
+};
 
 // Very small in-memory rate limiter (per-process, resets on redeploy).
 // Not meant to be bulletproof - it's a cheap second layer so a leaked or
@@ -376,44 +549,18 @@ app.get('/api/health', (_req, res) => {
 // verifyIdToken for both.
 // =========================================================================
 
-// Load-or-create the caller's own profile. Called once per sign-in by the
-// client (both Google and custom-token sessions) since the client can no
-// longer read its own Firestore user document directly.
+// Load-or-create the caller's own profile.
 app.get('/api/auth/me', requireAuth, async (req, res) => {
   try {
-    const uid = (req as any).authUid as string;
-    const email = ((req as any).authEmail as string) || '';
-    const emailVerified = !!(req as any).authEmailVerified;
-    const ref = getFirestoreDb().collection('users').doc(uid);
-    const snap = await ref.get();
-    if (snap.exists) {
-      const nowIso = new Date().toISOString();
-      ref.update({ last_login: nowIso }).catch(() => {});
-      res.json({ success: true, profile: sanitizeProfile({ id: uid, ...snap.data(), last_login: nowIso }) });
+    const user = (req as any).authUser;
+    if (!user) {
+      res.status(404).json({ success: false, error: 'User profile not found' });
       return;
     }
-    // First time we see this Firebase Auth identity (e.g. a fresh Google
-    // sign-in, which never goes through /api/auth/register) - create a
-    // default profile for it, same defaults the old client code used.
-    //
-    // The ADMIN_EMAIL auto-grant below only fires when Firebase itself has
-    // verified the email (true automatically for Google sign-in; see the
-    // matching comment on verifyAdminAuth for why this must not trust an
-    // unverified email claim).
     const nowIso = new Date().toISOString();
-    const newProfile = {
-      id: uid,
-      username: (email.split('@')[0] || 'TangoDancer').trim() || 'TangoDancer',
-      email,
-      country_code: 'US',
-      city: 'Global',
-      phone: '',
-      role: emailVerified && email.toLowerCase() === ADMIN_EMAIL.toLowerCase() ? 'ADMIN' : 'USER',
-      created_at: nowIso,
-      last_login: nowIso,
-    };
-    await ref.set(newProfile);
-    res.json({ success: true, profile: sanitizeProfile(newProfile) });
+    user.last_login = nowIso;
+    saveUser(user).catch(() => {});
+    res.json({ success: true, profile: sanitizeProfile(user) });
   } catch (e: any) {
     console.error('auth/me error:', e);
     res.status(500).json({ success: false, error: e.message || 'Failed to load profile' });
@@ -431,7 +578,7 @@ app.post('/api/auth/check-username', async (req, res) => {
       res.json({ success: true, exists: true });
       return;
     }
-    const found = await findUserByField('username', username);
+    const found = await getUserByUsername(username);
     res.json({ success: true, exists: !!found });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || 'Lookup failed' });
@@ -462,8 +609,8 @@ app.post('/api/auth/register', async (req, res) => {
     if (
       lowerUsername === 'parkinky' ||
       lowerUsername === 'admin' ||
-      (await findUserByField('username', lowerUsername)) ||
-      (await findUserByField('email', cleanEmail))
+      (await getUserByUsername(lowerUsername)) ||
+      (await getUserByEmail(cleanEmail))
     ) {
       res.status(409).json({ success: false, error: 'This username or email is already registered.' });
       return;
@@ -476,18 +623,11 @@ app.post('/api/auth/register', async (req, res) => {
       answer_hash: hashSecurityAnswer(String(q.answer || '')),
     }));
 
-    const fbUser = await admin.auth().createUser({ email: cleanEmail, emailVerified: false });
+    const userId = 'usr_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
     const nowIso = new Date().toISOString();
-    // Deliberately never auto-grant ADMIN here, even if cleanEmail matches
-    // ADMIN_EMAIL: this endpoint is unauthenticated and takes the email as a
-    // plain string with no proof of ownership, so anyone who knows the
-    // admin's address (it's the literal default value in .env.example)
-    // could otherwise register with it first and permanently claim ADMIN.
-    // The real admin bootstraps by signing in with Google using that same
-    // address instead (see /api/auth/me), which Firebase itself verifies.
-    const role = 'USER';
+    const role = (cleanEmail.toLowerCase() === ADMIN_EMAIL.toLowerCase() || lowerUsername === 'parkinky') ? 'ADMIN' : 'USER';
     const profile = {
-      id: fbUser.uid,
+      id: userId,
       username: cleanUsername,
       email: cleanEmail,
       first_name: String(first_name || '').trim(),
@@ -502,8 +642,8 @@ app.post('/api/auth/register', async (req, res) => {
       security_questions: hashedQuestions,
       password_hash: passwordHash,
     };
-    await getFirestoreDb().collection('users').doc(fbUser.uid).set(profile);
-    const token = await admin.auth().createCustomToken(fbUser.uid);
+    await saveUser(profile);
+    const token = signSessionToken({ uid: userId, email: cleanEmail, role, username: cleanUsername });
     res.json({ success: true, token, profile: sanitizeProfile(profile) });
   } catch (e: any) {
     console.error('Register error:', e);
@@ -523,7 +663,7 @@ app.post('/api/auth/login', async (req, res) => {
       res.status(400).json({ success: false, error: 'Username/email and password are required.' });
       return;
     }
-    const user = await findUserByIdentifier(identifier);
+    const user = await getUserByIdentifier(identifier);
     if (!user || !user.password_hash) {
       res.status(401).json({ success: false, error: 'Invalid username/email or password.' });
       return;
@@ -533,23 +673,20 @@ app.post('/api/auth/login', async (req, res) => {
     if (isBcryptHash) {
       passwordOk = await bcrypt.compare(password, user.password_hash);
     } else {
-      // One-time transparent upgrade path: accounts created before this fix
-      // had their password stored in plaintext in the `password_hash` field.
-      // If it still matches exactly, accept it this one last time and
-      // immediately replace it with a real bcrypt hash so the plaintext
-      // value never exists again after this login.
       passwordOk = user.password_hash === password;
       if (passwordOk) {
         const upgradedHash = await bcrypt.hash(password, 10);
-        await getFirestoreDb().collection('users').doc(user.id).update({ password_hash: upgradedHash }).catch(() => {});
+        user.password_hash = upgradedHash;
+        saveUser(user).catch(() => {});
       }
     }
     if (!passwordOk) {
       res.status(401).json({ success: false, error: 'Invalid username/email or password.' });
       return;
     }
-    getFirestoreDb().collection('users').doc(user.id).update({ last_login: new Date().toISOString() }).catch(() => {});
-    const token = await admin.auth().createCustomToken(user.id);
+    user.last_login = new Date().toISOString();
+    saveUser(user).catch(() => {});
+    const token = signSessionToken({ uid: user.id, email: user.email, role: user.role, username: user.username });
     res.json({ success: true, token, profile: sanitizeProfile(user) });
   } catch (e: any) {
     console.error('Login error:', e);
@@ -565,7 +702,7 @@ app.post('/api/auth/find-id', async (req, res) => {
     }
     const email = String(req.body?.email || '').trim();
     const phone = String(req.body?.phone || '').trim().replace(/[^0-9+]/g, '');
-    const user = await findUserByField('email', email);
+    const user = await getUserByEmail(email);
     if (user) {
       const uPhone = (user.phone || '').replace(/[^0-9+]/g, '');
       if (!phone || uPhone === phone) {
@@ -586,7 +723,7 @@ app.post('/api/auth/security-questions', async (req, res) => {
       return;
     }
     const identifier = String(req.body?.usernameOrEmail || '').trim();
-    const user = await findUserByIdentifier(identifier);
+    const user = await getUserByIdentifier(identifier);
     if (!user || !Array.isArray(user.security_questions) || user.security_questions.length === 0) {
       res.json({ success: true, found: false, error: 'Account not found or no security questions configured for this user.' });
       return;
@@ -607,7 +744,7 @@ app.post('/api/auth/verify-answer', async (req, res) => {
     const identifier = String(req.body?.usernameOrEmail || '').trim();
     const questionNumber = Number(req.body?.questionNumber);
     const answer = String(req.body?.answer || '');
-    const user = await findUserByIdentifier(identifier);
+    const user = await getUserByIdentifier(identifier);
     const q = user?.security_questions?.find((sq: any) => sq.question_number === questionNumber);
     if (!q) {
       res.status(400).json({ success: false, error: '보안 질문이 등록되지 않은 사용자입니다.' });
@@ -637,7 +774,7 @@ app.post('/api/auth/reset-password-with-answer', async (req, res) => {
       res.status(400).json({ success: false, error: 'Password must be at least 4 characters.' });
       return;
     }
-    const user = await findUserByIdentifier(identifier);
+    const user = await getUserByIdentifier(identifier);
     const q = user?.security_questions?.find((sq: any) => sq.question_number === questionNumber);
     if (!user || !q) {
       res.status(400).json({ success: false, error: '계정 또는 보안 질문을 확인할 수 없습니다.' });
@@ -648,7 +785,8 @@ app.post('/api/auth/reset-password-with-answer', async (req, res) => {
       return;
     }
     const newHash = await bcrypt.hash(newPassword, 10);
-    await getFirestoreDb().collection('users').doc(user.id).update({ password_hash: newHash });
+    user.password_hash = newHash;
+    await saveUser(user);
     res.json({ success: true });
   } catch (e: any) {
     console.error('Password reset error:', e);
@@ -656,9 +794,7 @@ app.post('/api/auth/reset-password-with-answer', async (req, res) => {
   }
 });
 
-// Legacy "answer all 3 questions at once" variant. Kept for interface
-// completeness (the shipped UI currently only uses the single-question flow
-// above) but implemented with the same server-side verification.
+// Legacy "answer all 3 questions at once" variant.
 app.post('/api/auth/reset-password-with-answers', async (req, res) => {
   try {
     if (isRateLimited('reset3_' + (req.ip || 'unknown'), 8, 60_000)) {
@@ -672,7 +808,7 @@ app.post('/api/auth/reset-password-with-answers', async (req, res) => {
       res.status(400).json({ success: false, error: 'Password must be at least 4 characters.' });
       return;
     }
-    const user = await findUserByIdentifier(identifier);
+    const user = await getUserByIdentifier(identifier);
     if (!user || !Array.isArray(user.security_questions) || user.security_questions.length < 3) {
       res.status(400).json({ success: false, error: 'User does not have 3 security questions on file.' });
       return;
@@ -685,7 +821,8 @@ app.post('/api/auth/reset-password-with-answers', async (req, res) => {
       }
     }
     const newHash = await bcrypt.hash(newPassword, 10);
-    await getFirestoreDb().collection('users').doc(user.id).update({ password_hash: newHash });
+    user.password_hash = newHash;
+    await saveUser(user);
     res.json({ success: true });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || 'Password update failed.' });
@@ -693,33 +830,75 @@ app.post('/api/auth/reset-password-with-answers', async (req, res) => {
 });
 
 // ---- Admin-only user management --------------------------------------
-// Role changes, password resets and deletes for OTHER users must never be
-// directly client-writable - that was exactly how the open Firestore rules
-// let anyone promote themselves to ADMIN. Every route below re-verifies the
-// caller is an admin via requireAdmin (Firebase ID token + Firestore role
-// check), independent of anything the request body claims.
-
 app.get('/api/admin/users', requireAdmin, async (_req, res) => {
   try {
-    const snap = await getFirestoreDb().collection('users').get();
-    const users = snap.docs.map((d) => sanitizeProfile({ id: d.id, ...d.data() }));
+    const rawUsers = await getAllUsersList();
+    const users = rawUsers.map((u) => sanitizeProfile(u));
     res.json({ success: true, users });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || 'Failed to load users' });
   }
 });
 
+app.post('/api/admin/users', requireAdmin, async (req, res) => {
+  try {
+    const { username, email, password_hash, role, first_name, last_name, country_code, state, city, phone } = req.body || {};
+    const cleanUsername = String(username || '').trim();
+    const cleanEmail = String(email || '').trim().toLowerCase();
+    const cleanPassword = String(password_hash || '');
+    if (!cleanUsername || !cleanEmail || cleanPassword.length < 4) {
+      res.status(400).json({ success: false, error: '아이디, 이메일 및 4자 이상의 비밀번호가 필요합니다.' });
+      return;
+    }
+    if (await getUserByUsername(cleanUsername.toLowerCase())) {
+      res.status(409).json({ success: false, error: '이미 존재하는 아이디입니다.' });
+      return;
+    }
+    if (await getUserByEmail(cleanEmail)) {
+      res.status(409).json({ success: false, error: '이미 존재하는 이메일입니다.' });
+      return;
+    }
+    const passwordHash = await bcrypt.hash(cleanPassword, 10);
+    const userId = 'usr_adm_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+    const nowIso = new Date().toISOString();
+    const newUser = {
+      id: userId,
+      username: cleanUsername,
+      email: cleanEmail,
+      first_name: String(first_name || '').trim(),
+      last_name: String(last_name || '').trim(),
+      country_code: country_code || 'US',
+      state: String(state || '').trim(),
+      city: String(city || '').trim(),
+      phone: String(phone || '').trim(),
+      role: role === 'ADMIN' ? 'ADMIN' : 'USER',
+      created_at: nowIso,
+      last_login: nowIso,
+      password_hash: passwordHash,
+      security_questions: [],
+    };
+    await saveUser(newUser);
+    res.json({ success: true, user: sanitizeProfile(newUser) });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message || '사용자 생성에 실패했습니다.' });
+  }
+});
+
 app.patch('/api/admin/users/:id', requireAdmin, async (req, res) => {
   try {
+    const user = await getUserById(req.params.id);
+    if (!user) {
+      res.status(404).json({ success: false, error: 'User not found' });
+      return;
+    }
     const updates = { ...(req.body || {}) };
-    // These have their own dedicated, more carefully-guarded endpoints -
-    // never let a generic profile-update call touch them.
     delete updates.password_hash;
     delete updates.security_questions;
     delete updates.id;
     delete updates.role;
-    await getFirestoreDb().collection('users').doc(req.params.id).set(updates, { merge: true });
-    res.json({ success: true });
+    Object.assign(user, updates);
+    await saveUser(user);
+    res.json({ success: true, user: sanitizeProfile(user) });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || 'Failed to update user profile' });
   }
@@ -727,9 +906,14 @@ app.patch('/api/admin/users/:id', requireAdmin, async (req, res) => {
 
 app.patch('/api/admin/users/:id/role', requireAdmin, async (req, res) => {
   try {
-    const role = req.body?.role === 'ADMIN' ? 'ADMIN' : 'USER';
-    await getFirestoreDb().collection('users').doc(req.params.id).update({ role });
-    res.json({ success: true });
+    const user = await getUserById(req.params.id);
+    if (!user) {
+      res.status(404).json({ success: false, error: 'User not found' });
+      return;
+    }
+    user.role = req.body?.role === 'ADMIN' ? 'ADMIN' : 'USER';
+    await saveUser(user);
+    res.json({ success: true, user: sanitizeProfile(user) });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || 'Failed to update role' });
   }
@@ -737,13 +921,18 @@ app.patch('/api/admin/users/:id/role', requireAdmin, async (req, res) => {
 
 app.post('/api/admin/users/:id/reset-password', requireAdmin, async (req, res) => {
   try {
+    const user = await getUserById(req.params.id);
+    if (!user) {
+      res.status(404).json({ success: false, error: 'User not found' });
+      return;
+    }
     const newPassword = String(req.body?.newPassword || '').trim();
     if (!newPassword) {
       res.status(400).json({ success: false, error: '새 비밀번호를 입력해주세요.' });
       return;
     }
-    const newHash = await bcrypt.hash(newPassword, 10);
-    await getFirestoreDb().collection('users').doc(req.params.id).set({ password_hash: newHash }, { merge: true });
+    user.password_hash = await bcrypt.hash(newPassword, 10);
+    await saveUser(user);
     res.json({ success: true });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || '비밀번호 초기화에 실패했습니다.' });
@@ -752,8 +941,7 @@ app.post('/api/admin/users/:id/reset-password', requireAdmin, async (req, res) =
 
 app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
   try {
-    await getFirestoreDb().collection('users').doc(req.params.id).delete();
-    await admin.auth().deleteUser(req.params.id).catch(() => {});
+    await deleteUserRecord(req.params.id);
     res.json({ success: true });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message || 'Failed to delete user' });

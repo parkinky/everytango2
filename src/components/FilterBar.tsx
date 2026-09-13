@@ -74,7 +74,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({ currentLang }) => {
         <div className="flex flex-wrap items-center gap-1.5 shrink-0">
           <div className="flex items-center gap-1 text-[11px] uppercase tracking-wider font-bold text-gray-600 mr-1 select-none">
             <Calendar className="w-3.5 h-3.5 text-red-600 shrink-0" />
-            <span className="text-gray-900 font-extrabold">Quick Range</span>
+            <span className="text-gray-900 font-extrabold">{t.filter.quickRange}</span>
           </div>
 
           <button
@@ -216,7 +216,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({ currentLang }) => {
         <div className="flex flex-wrap items-center gap-1.5">
           <div className="flex items-center gap-1 text-[11px] uppercase tracking-wider font-bold text-gray-600 mr-1 select-none">
             <Layers className="w-3.5 h-3.5 text-gray-500 shrink-0" />
-            <span className="text-gray-900 font-extrabold">Event Type</span>
+            <span className="text-gray-900 font-extrabold">{t.filter.eventType}</span>
           </div>
 
           <button

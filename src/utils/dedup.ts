@@ -142,13 +142,21 @@ export async function hashAnswer(text: string): Promise<string> {
   return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+const WEEKDAY_NAMES: Record<string, string[]> = {
+  en: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+  es: ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'],
+  ko: ['일', '월', '화', '수', '목', '금', '토'],
+  ja: ['日', '月', '火', '水', '木', '金', '土'],
+  zh: ['日', '一', '二', '三', '四', '五', '六'],
+};
+
 // Format date range: 2026-10-15(Thu) ~ 2026-10-18(Sun)
-export function formatDateRange(startDateStr: string, endDateStr: string): string {
+export function formatDateRange(startDateStr: string, endDateStr: string, lang: string = 'en'): string {
   if (!startDateStr) return '';
-  const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const weekdays = WEEKDAY_NAMES[lang] || WEEKDAY_NAMES.en;
   
   const start = new Date(startDateStr + 'T00:00:00');
-  const startDay = weekdays[start.getDay()];
+  const startDay = weekdays[start.getDay()] || '';
   const startHyphen = startDateStr.replace(/[/.]/g, '-');
   const startFormatted = `${startHyphen}(${startDay})`;
 
@@ -157,7 +165,7 @@ export function formatDateRange(startDateStr: string, endDateStr: string): strin
   }
 
   const end = new Date(endDateStr + 'T00:00:00');
-  const endDay = weekdays[end.getDay()];
+  const endDay = weekdays[end.getDay()] || '';
   const endHyphen = endDateStr.replace(/[/.]/g, '-');
   const endFormatted = `${endHyphen}(${endDay})`;
 
@@ -167,9 +175,9 @@ export function formatDateRange(startDateStr: string, endDateStr: string): strin
 // Format date into 2 lines for ultra-compact display:
 // Line 1: startDate(weekday) e.g. 2026-09-11(Fri)
 // Line 2: ~ endDate(weekday) e.g. ~ 2026-09-13(Sun)
-export function formatTwoLineDate(startDateStr: string, endDateStr: string): { start: string; end: string | null } {
+export function formatTwoLineDate(startDateStr: string, endDateStr: string, lang: string = 'en'): { start: string; end: string | null } {
   if (!startDateStr) return { start: '', end: null };
-  const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const weekdays = WEEKDAY_NAMES[lang] || WEEKDAY_NAMES.en;
   
   const start = new Date(startDateStr + 'T00:00:00');
   const startDay = weekdays[start.getDay()] || '';

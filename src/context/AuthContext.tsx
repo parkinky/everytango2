@@ -54,27 +54,32 @@ interface AuthContextType {
   updateUserRole: (userId: string, newRole: UserRole) => Promise<void>;
   updateUserProfile: (userId: string, updates: Partial<UserProfile>) => Promise<{ success: boolean; error?: string }>;
   resetUserPasswordByAdmin: (userId: string, newPassword: string) => Promise<{ success: boolean; error?: string }>;
-  deleteUser: (userId: string) => Promise<void>;
+  deleteUser: (userId: string, username?: string) => Promise<void>;
+  adminCreateUser: (userData: any) => Promise<{ success: boolean; error?: string; user?: UserProfile }>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Attaches the current Firebase ID token (if any) to a JSON request. Used for
-// every endpoint that requires the caller to be logged in / an admin - the
-// server independently re-verifies this token and the caller's role, it
-// never trusts anything the client claims about itself.
+// Attaches the current Firebase ID token or session token to a request.
 async function authedFetch(url: string, options: RequestInit = {}): Promise<Response> {
-  let idToken: string | undefined;
+  let token: string | undefined;
   try {
-    idToken = await auth.currentUser?.getIdToken();
+    token = await auth.currentUser?.getIdToken();
   } catch {
-    idToken = undefined;
+    token = undefined;
+  }
+  if (!token) {
+    try {
+      token = localStorage.getItem('everytango_session_token') || undefined;
+    } catch {
+      token = undefined;
+    }
   }
   return fetch(url, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
-      ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(options.headers || {}),
     },
   });
@@ -94,17 +99,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState<boolean>(true);
 
   useEffect(() => {
-    // One-time cleanup: earlier builds stored a forgeable "session" (and a
-    // fake local user database) directly in localStorage. Those are no
-    // longer read anywhere, but remove them so a stale/tampered value from
-    // before this fix can never be confused with anything.
-    try {
-      localStorage.removeItem('everytango_custom_user');
-      localStorage.removeItem('everytango_db_users');
-    } catch {
-      // ignore (e.g. storage disabled)
-    }
-
     const unsub = onAuthStateChanged(auth, async (fbUser) => {
       setCurrentUser(fbUser);
       if (fbUser) {
@@ -114,12 +108,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             headers: { Authorization: `Bearer ${idToken}` },
           });
           const data = await safeJson(res);
-          setUserProfile(res.ok && data.success ? data.profile : null);
+          if (res.ok && data.success && data.profile) {
+            setUserProfile(data.profile);
+            setLoading(false);
+            return;
+          }
         } catch (err) {
-          console.warn('Could not load user profile:', err);
+          console.warn('Could not load user profile from firebase user:', err);
+        }
+      }
+
+      // Check stored custom session token if no Firebase user or Firebase fetch failed
+      const storedToken = localStorage.getItem('everytango_session_token');
+      if (storedToken) {
+        try {
+          const res = await fetch('/api/auth/me', {
+            headers: { Authorization: `Bearer ${storedToken}` },
+          });
+          const data = await safeJson(res);
+          if (res.ok && data.success && data.profile) {
+            setUserProfile(data.profile);
+          } else {
+            localStorage.removeItem('everytango_session_token');
+            setUserProfile(null);
+          }
+        } catch {
           setUserProfile(null);
         }
-      } else {
+      } else if (!fbUser) {
         setUserProfile(null);
       }
       setLoading(false);
@@ -151,7 +167,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (!res.ok || !data.success) {
         return { success: false, error: data.error || 'Login failed' };
       }
-      await signInWithCustomToken(auth, data.token);
+      if (data.token) {
+        try {
+          localStorage.setItem('everytango_session_token', data.token);
+        } catch {}
+      }
+      if (data.profile) {
+        setUserProfile(data.profile);
+      }
+      try {
+        await signInWithCustomToken(auth, data.token);
+      } catch (fbErr) {
+        console.warn('Custom token Firebase exchange skipped or fallback to session token:', fbErr);
+      }
       return { success: true };
     } catch (err: any) {
       return { success: false, error: err.message || 'Login failed' };
@@ -191,7 +219,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (!res.ok || !data.success) {
         return { success: false, error: data.error || 'Registration failed' };
       }
-      await signInWithCustomToken(auth, data.token);
+      if (data.token) {
+        try {
+          localStorage.setItem('everytango_session_token', data.token);
+        } catch {}
+      }
+      if (data.profile) {
+        setUserProfile(data.profile);
+      }
+      try {
+        await signInWithCustomToken(auth, data.token);
+      } catch (fbErr) {
+        console.warn('Custom token Firebase exchange skipped or fallback to session token:', fbErr);
+      }
       return { success: true };
     } catch (err: any) {
       return { success: false, error: err.message || 'Registration failed' };
@@ -200,11 +240,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = async () => {
     try {
+      localStorage.removeItem('everytango_session_token');
+    } catch {}
+    try {
       await fbSignOut(auth);
     } catch (err) {
       console.warn('Sign out error:', err);
     }
     setUserProfile(null);
+    setCurrentUser(null);
   };
 
   const findIdByEmailAndPhone = async (email: string, phone: string): Promise<{ found: boolean; username?: string; error?: string }> => {
@@ -370,11 +414,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const deleteUser = async (userId: string) => {
+  const deleteUser = async (userId: string, _username?: string) => {
     try {
       await authedFetch(`/api/admin/users/${encodeURIComponent(userId)}`, { method: 'DELETE' });
     } catch (err) {
       console.warn('Delete user error:', err);
+    }
+  };
+
+  const adminCreateUser = async (userData: any): Promise<{ success: boolean; error?: string; user?: UserProfile }> => {
+    try {
+      const res = await authedFetch('/api/admin/users', {
+        method: 'POST',
+        body: JSON.stringify(userData),
+      });
+      const data = await safeJson(res);
+      if (!res.ok || !data.success) {
+        return { success: false, error: data.error || '사용자 생성에 실패했습니다.' };
+      }
+      return { success: true, user: data.user };
+    } catch (err: any) {
+      return { success: false, error: err.message || '사용자 생성 중 오류가 발생했습니다.' };
     }
   };
 
@@ -399,6 +459,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updateUserProfile,
         resetUserPasswordByAdmin,
         deleteUser,
+        adminCreateUser,
       }}
     >
       {children}
