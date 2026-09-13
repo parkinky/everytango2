@@ -178,6 +178,7 @@ export const SiteConfigProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             }
             return {
               ...ch,
+              eventWindow: ch.eventWindow === 'year' ? 'year' : 'month',
               country_code: cCode,
               state: sState,
             };
@@ -288,6 +289,7 @@ export const SiteConfigProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
     const newChannel: CrawlingChannel = {
       ...channelData,
+      eventWindow: channelData.eventWindow === 'year' ? 'year' : 'month',
       country_code: cCode,
       state: sState,
       id: newId,

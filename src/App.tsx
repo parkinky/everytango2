@@ -55,37 +55,59 @@ function MainAppContent() {
   return (
     <div className="min-h-screen bg-[#F8F9FA] text-[#1A1A1A] flex flex-col font-sans selection:bg-red-600 selection:text-white w-full max-w-full overflow-x-hidden">
       
-      {/* Dynamic Top Announcement Banner (Controlled live via Gemini AI / Admin) */}
-      {siteConfig.announcementEnabled && siteConfig.siteAnnouncement && (
-        <div 
-          id="live-site-announcement-strip"
-          className="bg-red-900 text-white text-xs py-1.5 px-3 sm:px-4 border-b border-red-800 transition-all shadow-xs relative flex items-center"
-        >
-          {/* Centered text container, padded on the right so text shifts left by the button's width */}
-          <div className="flex-1 flex items-center justify-center gap-2 overflow-hidden pr-36 sm:pr-40">
-            <Megaphone className="w-3.5 h-3.5 text-red-200 shrink-0" />
-            <span className="truncate max-w-4xl text-center font-medium">{siteConfig.siteAnnouncement}</span>
-          </div>
-
-          {/* Admin Dashboard Button anchored to the far right end */}
-          <button
-            id="top-admin-dashboard-btn"
-            onClick={handleAdminDashboardClick}
-            className={`absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold transition-all shrink-0 cursor-pointer ${
-              activeTab === 'admin'
-                ? 'bg-white text-red-900 shadow-xs'
-                : 'bg-red-800/80 hover:bg-red-800 text-red-100 hover:text-white border border-red-700/60'
-            }`}
-            title={activeTab === 'admin' ? 'Exit Admin Dashboard' : t.nav.adminDashboard}
-          >
-            <ShieldCheck className="w-3.5 h-3.5 text-red-300" />
-            <span>{t.nav.adminDashboard}</span>
-            {isAdmin && (
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
-            )}
-          </button>
+      {/* Dynamic Top Announcement Banner & Login Status Strip */}
+      <div 
+        id="live-site-announcement-strip"
+        className="w-full bg-red-900 text-white text-[11px] sm:text-xs py-1.5 px-3 sm:px-4 border-b border-red-800 transition-all shadow-xs relative flex items-center justify-between min-h-[34px] gap-2 sm:gap-4"
+      >
+        {/* Left: Login status (Guest / Logged-in user or admin) */}
+        <div className="flex items-center gap-1.5 shrink-0 z-10 max-w-[200px] xs:max-w-[240px] sm:max-w-xs md:max-w-sm truncate text-red-100">
+          {currentUser ? (
+            <span 
+              className="truncate flex items-center gap-1.5 text-xs font-medium" 
+              title={`[${isAdmin ? 'ADMIN' : 'USER'}] ID: ${userProfile?.username || userProfile?.id || currentUser.uid} · ${userProfile?.email || currentUser.email}`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${isAdmin ? 'bg-amber-400' : 'bg-emerald-400'} shrink-0`} />
+              <span className="font-bold text-[10px] sm:text-[11px] px-1.5 py-0.5 rounded bg-black/25 text-white/90 shrink-0">
+                {isAdmin ? 'ADMIN' : 'USER'}
+              </span>
+              <span className="truncate text-red-100">
+                ID: {userProfile?.username || userProfile?.id || currentUser.uid} · {userProfile?.email || currentUser.email}
+              </span>
+            </span>
+          ) : (
+            <span className="text-red-200 font-medium whitespace-nowrap">Guest</span>
+          )}
         </div>
-      )}
+
+        {/* Center: Live Announcement Banner */}
+        {siteConfig.announcementEnabled && siteConfig.siteAnnouncement ? (
+          <div className="flex-1 min-w-0 flex items-center justify-center gap-1.5 px-2 overflow-hidden">
+            <Megaphone className="w-3.5 h-3.5 text-red-200 shrink-0" />
+            <span className="truncate max-w-2xl text-center font-medium text-white">{siteConfig.siteAnnouncement}</span>
+          </div>
+        ) : (
+          <div className="flex-1" />
+        )}
+
+        {/* Right: Admin Dashboard Button */}
+        <button
+          id="top-admin-dashboard-btn"
+          onClick={handleAdminDashboardClick}
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold transition-all shrink-0 cursor-pointer z-10 ${
+            activeTab === 'admin'
+              ? 'bg-white text-red-900 shadow-xs'
+              : 'bg-red-800/80 hover:bg-red-800 text-red-100 hover:text-white border border-red-700/60'
+          }`}
+          title={activeTab === 'admin' ? 'Exit Admin Dashboard' : t.nav.adminDashboard}
+        >
+          <ShieldCheck className="w-3.5 h-3.5 text-red-300" />
+          <span>{t.nav.adminDashboard}</span>
+          {isAdmin && (
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+          )}
+        </button>
+      </div>
 
       {/* Global Navigation Header */}
       <Header

@@ -1,3 +1,4 @@
+import { useEventDisplayText } from '../utils/notesTranslator';
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
   ShieldCheck, 
@@ -77,6 +78,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
     stats 
   } = useEvents();
 
+  const displayText = useEventDisplayText(currentLang, [...events.flatMap(ev => [ev.event_name, ev.city, ev.state, ev.address, ev.price, ev.notes]), ...["사이트 이벤트 가져오기 (Cron)","승인","재승인","사용자 추가","2차","수정","정보 수정 (Edit)","삭제 (Delete)","USER (일반 사용자)","ADMIN (최고 관리자)","임시비번 생성","즉시 초기화","수정 시 주의사항","저장 버튼을 누르면 최종 확인 팝업이 표시되며, 확인 후 즉시 Firestore 데이터베이스 및 활성 세션에 반영됩니다.","저장 중...","수정 완료 (Save Changes)","매주 금요일 새벽 1시 (Weekly on Friday 01:00 AM CST - 기본 활성)","오늘 ~ +6개월 예정 행사","중복 필터링 유사도 기준","개최 예정인 행사 내용(이름, 일시, 장소)만","가져와","[승인대상 목록 (PENDING)]","+ 사이트 추가","사이트 이름","사이트 주소","최근가져온날짜","누적 가져온수","가져오기","수정","폐기","미실행","이벤트 내용 가져오기 조건:","관리자가 등록한","공식 웹사이트/블로그(서브 사이트 자동 탐색 포함)","및 페이스북 커뮤니티에서 조회되는 다가오는 행사(개최 예정 행사)의","이벤트 제목, 일정, 비용(가장 높은 옵션의 금액을 \"~$000\" 양식으로 표시)","데이터를 가져와","승인대상 목록 (PENDING)","으로 자동 등록합니다. 수집된 이벤트는 상단","[이벤트 관리 &gt; PENDING]","(매주 금요일 01:00 AM CST)","승인대상 목록(PENDING) 신규 등록:","건 (주소 검증 완료)","사이트 주소 무효 / 종료 행사 제외:","건 제외 (행사 미확인)","중복 필터링 제외:","건 차단됨","승인 대기 안내:","승인대상 목록 검토하기 (Go to Pending)","중복 및 필터링 상세 로그:","사이트 이벤트 가져오기 실행 이력 (Execution History)","Apply Curated Notice (자동 반영)","※ Curated Notice만 자동 반영되며, Top Announcement와 Hero Headline은 수동 관리 설정에 따라 보존됩니다.","(실시간 사이트 설정 관리)","와","은 관리자","수동 업데이트","항목이며,","는 시스템 및 AI에 의해","자동 업데이트","수동 업데이트 영역 (Manual Management Only)","— 관리자가 직접 입력하여 수정하며, AI나 자동 프로세스에 의해 임의로 변경되지 않습니다.","Hero Banner Background Image (상단 히어로 배경 사진 설정)","실제 사진 파일 선택 (Screenshot / IMG_2077 등)","Enable Top Announcement Bar (상단 공지 배너 활성화)","플랫폼 / 사이트 유형","Facebook 커뮤니티/그룹","전문 탱고 포털 (Tangopolix 등)","캘린더 / 마라톤 레지스트리","지역 동호회 / 카페","공식 웹사이트 / 블로그","Instagram 피드","기타 소셜 / 웹","대상 국가 코드","ALL (전체 국가 / 글로벌)","대상 도시 (City)","주 / 지역 (State / Province)","사이트 설명 및 수집 메모","사이트 활성화 (Active)","새 사용자 등록 (Add New User)","관리자 권한으로 시스템에 새로운 사용자 계정을 생성합니다.","공백 없이 영문/숫자 3자 이상","로그인 및 알림 수신에 사용됩니다","등록 후 사용자가 재설정 가능합니다","일반 사용자 (USER)","시스템 관리자 (ADMIN)","관리자 대시보드 접근 권한 여부","국가 (Country)","도시 (City)","연락처 (Phone)","생성 중...","사용자 생성 (Save)","English (영문 회신 메일)"]]);
   const [isSyncingVenues, setIsSyncingVenues] = useState(false);
 
   const { 
@@ -832,7 +834,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
         itemsAdded: res.addedCount,
         duplicatesBlocked: res.duplicateCount,
         durationMs: Date.now() - startTime,
-        message: `[사이트 이벤트 내용 가져오기] (${targetChannels.map((c) => c.name).join(', ')}): ${res.addedCount}건이 승인대상 목록(PENDING)에 등록되었습니다 (${res.duplicateCount}건 중복 제외)${invalidText}.`,
+        message: `[사이트 이벤트 내용 가져오기] (${targetChannels.map((c) => c.name).join(', ')}): ${res.addedCount}건이 승인대상 목록(PENDING)에 등록되었습니다 (${res.duplicateCount}건 중복 제외)${invalidText}. ${res.timeWindow || ''}`,
       }, res.updatedChannels);
 
       // Auto-update Curated Notice automatically upon completion
@@ -848,11 +850,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
         `✅ [사이트 이벤트 내용 가져오기 완료]\n\n` +
         `• 대상 사이트: ${channelNames}${hasWebsiteChannel ? ' (공식 웹사이트 및 서브 사이트 검색 완료)' : ''}\n` +
         `• 승인대상 목록(PENDING) 등록: ${res.addedCount}건\n` +
-        `• 최고가 옵션 비용 양식: ~$000 적용 완료\n` +
+        `• 원문에 없는 비용은 미확인으로 표시\n` +
         `• 중복/기존 등록 이벤트 제외: ${res.duplicateCount}건\n\n` +
         `관리자 사전 승인 질문 없이 이벤트가 [승인대상 목록 (PENDING)] 탭으로 바로 등록되었습니다.\n상단 [이벤트 관리 > PENDING] 탭에서 검토 후 최종 승인(APPROVE)하실 수 있습니다.`
       );
     } catch (err: any) {
+      addCronLog({ id: 'cron_' + Date.now(), timestamp: new Date().toISOString(), status: 'FAILED',
+        itemsDiscovered: 0, itemsAdded: 0, duplicatesBlocked: 0, durationMs: Date.now() - startTime,
+        message: '[사이트 수집 실패] ' + (err?.message || String(err)) });
       alert(`사이트 이벤트 내용 가져오기 중 오류가 발생했습니다: ${err?.message || String(err)}`);
     } finally {
       setIsExtractingSiteEvents(false);
@@ -1387,7 +1392,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
           }`}
         >
           <Clock className="w-4 h-4 text-amber-600" />
-          <span>사이트 이벤트 가져오기 (Cron)</span>
+          <span>{displayText("사이트 이벤트 가져오기 (Cron)")}</span>
         </button>
 
         <button
@@ -1486,7 +1491,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                 title="현재 목록 이벤트들의 웹사이트 주소 유효성 및 활성 상태 일괄 검사"
               >
                 <Globe className={`w-3.5 h-3.5 ${isValidatingUrls ? 'animate-spin' : ''}`} />
-                <span>{isValidatingUrls ? '주소 검사 중...' : 'URL 검사'}</span>
+                <span>{displayText(isValidatingUrls ? '주소 검사 중...' : 'URL 검사')}</span>
               </button>
 
               {/* Add New Event Direct Button */}
@@ -1613,9 +1618,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                     </tr>
                   ) : (
                     sortedEventsForAdmin.map((ev) => {
-                      const { start, end } = formatTwoLineDate(ev.start_date, ev.end_date);
-                      const addr = formatTwoLineAddress(ev);
-                      const usd = convertPriceToUSD(ev.price, ev.is_free, ev.country_code);
+                      const { start, end } = formatTwoLineDate(ev.start_date, ev.end_date, currentLang);
+                      const addr = formatTwoLineAddress({ ...ev, city: displayText(ev.city), state: displayText(ev.state), address: displayText(ev.address) });
+                      const usd = convertPriceToUSD(ev.price, ev.is_free, ev.country_code, currentLang);
                       const crawled = formatCrawledDate(ev.created_at);
 
                       return (
@@ -1653,7 +1658,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                           {/* Event Name & Link */}
                           <td className="py-2.5 pl-4.5 pr-2.5 font-bold text-gray-900 align-middle">
                             <div className="flex items-center gap-1.5 min-w-0">
-                              <span className="truncate block" title={ev.event_name}>{ev.event_name}</span>
+                              <span className="truncate block" title={displayText(ev.event_name)}>{displayText(ev.event_name)}</span>
                               <EventSourceLink event={ev} showDropdown={false} />
                               {urlValidationMap[ev.id] && !urlValidationMap[ev.id].isValid && (
                                 <span
@@ -1687,12 +1692,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                           {/* Price in USD */}
                           <td className="py-2.5 px-1 whitespace-nowrap font-semibold text-right align-middle">
                             <div className="leading-tight">
-                              <span className={`font-mono text-xs font-bold ${usd.isFree ? 'text-green-600' : 'text-gray-900'}`}>
-                                {usd.usdFormatted}
+                              <span className={`font-mono text-xs font-bold ${usd.isFree ? 'text-green-600' : usd.usdFormatted === 'N/S' ? 'text-gray-400 font-medium' : 'text-gray-900'}`}>
+                                {displayText(usd.usdFormatted)}
                               </span>
-                              {usd.originalFormatted && usd.originalFormatted !== usd.usdFormatted && (
-                                <div className="text-[10px] text-gray-400 font-mono font-normal truncate" title={usd.originalFormatted}>
-                                  ({usd.originalFormatted})
+                              {usd.originalFormatted && usd.originalFormatted !== usd.usdFormatted && usd.usdFormatted !== 'N/S' && (
+                                <div className="text-[10px] text-gray-400 font-mono font-normal truncate" title={displayText(usd.originalFormatted)}>
+                                  ({displayText(usd.originalFormatted)})
                                 </div>
                               )}
                             </div>
@@ -1733,7 +1738,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                                       setConfirmModal({
                                         isOpen: true,
                                         title: '이벤트 승인 및 게시 확인 (Approve Event)',
-                                        message: `"${ev.event_name}" 이벤트를 승인하고 공개 일정표에 즉시 게시하시겠습니까?${
+                                        message: `"${displayText(ev.event_name)}" 이벤트를 승인하고 공개 일정표에 즉시 게시하시겠습니까?${
                                           authorEmail
                                             ? `\n\n✉️ [자동 영문 회신 메일 발송 안내]\n승인 처리 완료 즉시 작성자(${authorEmail})에게 영문 승인 완료 및 즉시 게시 안내 회신 메일이 자동 발송됩니다.`
                                             : '\n\n✉️ [자동 영문 회신 메일 발송 안내]\n승인 완료 즉시 작성자의 이메일로 영문 승인 완료 및 즉시 게시 안내 회신 메일이 자동 발송됩니다.'
@@ -1759,14 +1764,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                                     title="Approve and Publish (Sends automated English reply email to author)"
                                   >
                                     <Mail className="w-2.5 h-2.5" />
-                                    <span>승인</span>
+                                    <span>{displayText("승인")}</span>
                                   </button>
                                   <button
                                     onClick={() => {
                                       setConfirmModal({
                                         isOpen: true,
                                         title: '이벤트 반려 확인 (Reject Event)',
-                                        message: `"${ev.event_name}" 이벤트를 등록 반려 처리하시겠습니까?`,
+                                        message: `"${displayText(ev.event_name)}" 이벤트를 등록 반려 처리하시겠습니까?`,
                                         confirmText: '반려 처리',
                                         cancelText: '취소',
                                         variant: 'warning',
@@ -1779,7 +1784,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                                     className="px-1.5 py-0.5 rounded bg-gray-200 hover:bg-gray-300 text-gray-700 text-[10px] font-semibold transition-colors cursor-pointer"
                                     title="Reject"
                                   >
-                                    반려
+                                    {displayText("반려")}
                                   </button>
                                 </>
                               )}
@@ -1791,7 +1796,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                                     setConfirmModal({
                                       isOpen: true,
                                       title: '이벤트 재승인 확인 (Re-approve Event)',
-                                      message: `반려되었던 "${ev.event_name}" 이벤트를 다시 승인하여 공개 일정에 게시하시겠습니까?${
+                                      message: `반려되었던 "${displayText(ev.event_name)}" 이벤트를 다시 승인하여 공개 일정에 게시하시겠습니까?${
                                         authorEmail
                                           ? `\n\n✉️ [자동 영문 회신 메일 발송 안내]\n승인 처리 완료 즉시 작성자(${authorEmail})에게 영문 승인 완료 및 즉시 게시 안내 회신 메일이 자동 발송됩니다.`
                                           : ''
@@ -1817,7 +1822,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                                   title="Re-approve and Publish"
                                 >
                                   <Mail className="w-2.5 h-2.5" />
-                                  <span>재승인</span>
+                                  <span>{displayText("재승인")}</span>
                                 </button>
                               )}
 
@@ -1826,7 +1831,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                                 <button
                                   onClick={() => onEditEvent(ev.id)}
                                   className="p-1 rounded-md hover:bg-blue-50 text-gray-400 hover:text-blue-600 transition-colors inline-block cursor-pointer"
-                                  title="Edit Event Content (이벤트 내용 편집)"
+                                  title={currentLang === "en" ? "Edit event content" : "이벤트 내용 편집"}
                                 >
                                   <Edit3 className="w-3.5 h-3.5" />
                                 </button>
@@ -1850,7 +1855,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                               checked={selectedEventIds.has(ev.id)}
                               onChange={(e) => toggleSelectEvent(ev.id, e.target.checked)}
                               className="w-4 h-4 text-red-600 rounded border-gray-300 focus:ring-red-500 cursor-pointer accent-red-600 transition-colors"
-                              aria-label={`Select ${ev.event_name} for deletion`}
+                              aria-label={`Select ${displayText(ev.event_name)} for deletion`}
                             />
                           </td>
 
@@ -2080,7 +2085,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                 title="새로운 사용자 등록"
               >
                 <UserPlus className="w-3.5 h-3.5" />
-                <span>사용자 추가</span>
+                <span>{displayText("사용자 추가")}</span>
               </button>
 
               <div className="relative w-full sm:w-64">
@@ -2215,7 +2220,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                           <span className="text-red-600 font-bold">{userSortAsc ? '↑' : '↓'}</span>
                         ) : userSortField === 'role' ? (
                           <span className="text-red-600/80 font-bold text-[10px] flex items-center gap-0.5" title="2차 정렬: 가입일 오름차순">
-                            <span className="text-[9px] text-gray-400 font-normal">2차</span>↑
+                            <span className="text-[9px] text-gray-400 font-normal">{displayText("2차")}</span>↑
                           </span>
                         ) : (
                           <ArrowUpDown className="w-3 h-3 text-gray-400" />
@@ -2297,7 +2302,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                                 title="사용자 정보 수정 (Edit User Info)"
                               >
                                 <Edit3 className="w-3 h-3" />
-                                <span>수정</span>
+                                <span>{displayText("수정")}</span>
                               </button>
 
                               {u.username !== 'parkinky' && (
@@ -2428,7 +2433,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                       className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
                     >
                       <Edit3 className="w-3.5 h-3.5" />
-                      <span>정보 수정 (Edit)</span>
+                      <span>{displayText("정보 수정 (Edit)")}</span>
                     </button>
                     {selectedUserDetails.username !== 'parkinky' && (
                       <button
@@ -2439,7 +2444,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                         className="px-3 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
-                        <span>삭제 (Delete)</span>
+                        <span>{displayText("삭제 (Delete)")}</span>
                       </button>
                     )}
                   </div>
@@ -2531,8 +2536,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                         disabled={editingUser.username === 'parkinky'}
                         className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-amber-600 focus:outline-none transition-colors font-semibold"
                       >
-                        <option value="USER">USER (일반 사용자)</option>
-                        <option value="ADMIN">ADMIN (최고 관리자)</option>
+                        <option value="USER">{displayText("USER (일반 사용자)")}</option>
+                        <option value="ADMIN">{displayText("ADMIN (최고 관리자)")}</option>
                       </select>
                     </div>
                   </div>
@@ -2607,7 +2612,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                           title="랜덤 임시 비밀번호 생성"
                         >
                           <Sparkles className="w-3 h-3" />
-                          <span>임시비번 생성</span>
+                          <span>{displayText("임시비번 생성")}</span>
                         </button>
                       </div>
                     </div>
@@ -2666,7 +2671,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                           ) : (
                             <KeyRound className="w-3.5 h-3.5" />
                           )}
-                          <span>즉시 초기화</span>
+                          <span>{displayText("즉시 초기화")}</span>
                         </button>
                       </div>
                     </div>
@@ -2712,9 +2717,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                   <div className="p-3 bg-amber-50/60 rounded-xl border border-amber-200/80 text-[11px] text-amber-800 space-y-1">
                     <p className="font-bold flex items-center gap-1">
                       <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
-                      <span>수정 시 주의사항</span>
+                      <span>{displayText("수정 시 주의사항")}</span>
                     </p>
-                    <p>저장 버튼을 누르면 최종 확인 팝업이 표시되며, 확인 후 즉시 Firestore 데이터베이스 및 활성 세션에 반영됩니다.</p>
+                    <p>{displayText("저장 버튼을 누르면 최종 확인 팝업이 표시되며, 확인 후 즉시 Firestore 데이터베이스 및 활성 세션에 반영됩니다.")}</p>
                   </div>
 
                   <div className="pt-2 flex items-center justify-end gap-2 border-t border-gray-100">
@@ -2733,12 +2738,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                       {userActionSaving ? (
                         <>
                           <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                          <span>저장 중...</span>
+                          <span>{displayText("저장 중...")}</span>
                         </>
                       ) : (
                         <>
                           <Check className="w-3.5 h-3.5" />
-                          <span>수정 완료 (Save Changes)</span>
+                          <span>{displayText("수정 완료 (Save Changes)")}</span>
                         </>
                       )}
                     </button>
@@ -2820,7 +2825,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                   }}
                   className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-xs font-semibold text-gray-800 focus:outline-none focus:border-red-600"
                 >
-                  <option value="weekly_fri_0100">매주 금요일 새벽 1시 (Weekly on Friday 01:00 AM CST - 기본 활성)</option>
+                  <option value="weekly_fri_0100">{displayText("매주 금요일 새벽 1시 (Weekly on Friday 01:00 AM CST - 기본 활성)")}</option>
                   <option value="weekly_mon">Weekly on Monday 02:00</option>
                   <option value="daily_0200">Daily at 02:00</option>
                   <option value="daily_0400">Daily at 04:00</option>
@@ -2852,14 +2857,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                   <option value="Europe/Paris">Europe/Paris (CET)</option>
                 </select>
                 <p className="text-[11px] text-gray-500">
-                  행사 추출 기간: <strong className="text-gray-900">오늘 ~ +6개월 예정 행사</strong>
+                  {currentLang === 'ko' ? '행사 추출 기간: ' : 'Event window: '}<strong className="text-gray-900">{currentLang === 'ko' ? '사이트별 Month: 오늘부터 1개월 / Year: 오늘부터 1년 (진행 중인 행사 포함)' : 'Per site: Month = today + 1 month / Year = today + 1 year (including ongoing events)'}</strong>
                 </p>
               </div>
 
               {/* Deduplication Similarity Threshold */}
               <div className="space-y-2 p-4 rounded-xl bg-gray-50 border border-gray-200">
                 <div className="flex items-center justify-between">
-                  <label className="font-bold text-gray-800">중복 필터링 유사도 기준</label>
+                  <label className="font-bold text-gray-800">{displayText("중복 필터링 유사도 기준")}</label>
                   <span className="font-mono font-bold text-red-600">
                     {(cronConfig.similarityThreshold * 100).toFixed(0)}%
                   </span>
@@ -2891,7 +2896,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                     </h4>
                   </div>
                   <p className="text-[11px] text-gray-500 mt-0.5">
-                    관리자가 등록한 페이스북 페이지/그룹, 웹사이트 주소에서 <strong className="text-gray-900">개최 예정인 행사 내용(이름, 일시, 장소)만</strong> 가져와 <strong className="text-red-700 font-semibold">[승인대상 목록 (PENDING)]</strong>에 바로 등록합니다.
+                    관리자가 등록한 페이스북 페이지/그룹, 웹사이트 주소에서 <strong className="text-gray-900">{displayText("개최 예정인 행사 내용(이름, 일시, 장소)만")}</strong>{displayText("가져와")}<strong className="text-red-700 font-semibold">{displayText("[승인대상 목록 (PENDING)]")}</strong>에 바로 등록합니다.
                   </p>
                 </div>
 
@@ -2914,7 +2919,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                     className="px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5" />
-                    <span>+ 사이트 추가</span>
+                    <span>{displayText("+ 사이트 추가")}</span>
                   </button>
                   {unexecutedChannelsCount > 0 && (
                     <button
@@ -2958,15 +2963,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
               <div className="rounded-xl border border-gray-200 bg-white shadow-2xs overflow-x-auto">
                 <table className="w-full table-fixed text-left text-xs border-collapse">
                   <thead>
-                    <tr className="bg-gray-100/80 border-b border-gray-200 text-[11px] font-bold text-gray-600 uppercase tracking-wider">
+                    <tr className="bg-gray-100/80 border-b border-gray-200 text-[11px] font-bold text-gray-600 tracking-normal">
                       {/* 1. City */}
                       <th 
                         onClick={() => handleChannelSort('city')}
                         className="py-2.5 pl-2 pr-1 w-[8.5%] min-w-[65px] max-w-[90px] whitespace-nowrap cursor-pointer hover:text-gray-900 transition-colors select-none"
-                        title="City 기준 정렬"
+                        title="도시 기준 정렬"
                       >
                         <div className="flex items-center gap-1">
-                          <span>City</span>
+                          <span>도시</span>
                           {channelSortField === 'city' ? (
                             <span className="text-red-600 font-bold">{channelSortAsc ? '↑' : '↓'}</span>
                           ) : (
@@ -2979,10 +2984,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                       <th 
                         onClick={() => handleChannelSort('country_code')}
                         className="py-2.5 px-1 w-[52px] text-center whitespace-nowrap cursor-pointer hover:text-gray-900 transition-colors select-none"
-                        title="NAT (국가코드) 기준 정렬"
+                        title="국가코드 기준 정렬"
                       >
                         <div className="flex items-center justify-center gap-0.5 -ml-1">
-                          <span>NAT</span>
+                          <span>국가</span>
                           {channelSortField === 'country_code' ? (
                             <span className="text-red-600 font-bold text-[11px]">{channelSortAsc ? '↑' : '↓'}</span>
                           ) : (
@@ -2995,10 +3000,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                       <th 
                         onClick={() => handleChannelSort('sourceType')}
                         className="py-2.5 px-1 w-[66px] whitespace-nowrap cursor-pointer hover:text-gray-900 transition-colors select-none"
-                        title="SOURCE 기준 정렬"
+                        title="출처 기준 정렬"
                       >
                         <div className="flex items-center gap-0.5 -ml-1">
-                          <span>SOURCE</span>
+                          <span>출처</span>
                           {channelSortField === 'sourceType' ? (
                             <span className="text-red-600 font-bold text-[11px]">{channelSortAsc ? '↑' : '↓'}</span>
                           ) : (
@@ -3010,11 +3015,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                       {/* 4. 사이트 이름 */}
                       <th 
                         onClick={() => handleChannelSort('name')}
-                        className="py-2.5 px-2 w-[23%] whitespace-nowrap cursor-pointer hover:text-gray-900 transition-colors select-none"
+                        className="py-2.5 px-2 w-[16.1%] whitespace-nowrap cursor-pointer hover:text-gray-900 transition-colors select-none"
                         title="사이트 이름 기준 정렬"
                       >
                         <div className="flex items-center gap-1">
-                          <span>사이트 이름</span>
+                          <span>사이트명</span>
                           {channelSortField === 'name' ? (
                             <span className="text-red-600 font-bold">{channelSortAsc ? '↑' : '↓'}</span>
                           ) : (
@@ -3022,6 +3027,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                           )}
                         </div>
                       </th>
+
+                      <th scope="col" className="py-2.5 px-0.5 w-[3.45%] text-center text-[10px] tracking-normal normal-case">1개월</th>
+                      <th scope="col" className="py-2.5 px-0.5 w-[3.45%] text-center text-[10px] tracking-normal normal-case">1년</th>
 
                       {/* 5. 사이트 주소 */}
                       <th 
@@ -3040,23 +3048,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                       </th>
 
                       {/* 6. 최근가져온날짜 (tight width, text-center) */}
-                      <th className="py-2.5 px-1.5 w-[86px] text-center whitespace-nowrap">최근가져온날짜</th>
+                      <th className="py-2.5 px-1.5 w-[86px] text-center whitespace-nowrap">최근 수집일</th>
                       {/* 7. 누적 가져온수 (tight width, centered to eliminate empty gap with date) */}
-                      <th className="py-2.5 px-1 w-[64px] text-center whitespace-nowrap">누적 가져온수</th>
+                      <th className="py-2.5 px-1 w-[64px] text-center whitespace-nowrap">누적 건수</th>
                       {/* 8. 내용 가져오기 */}
-                      <th className="py-2.5 px-1 w-[38px] text-center whitespace-nowrap" title="등록 사이트에서 이벤트 내용(이름, 날짜, 시간) 가져오기">가져오기</th>
+                      <th className="py-2.5 px-1 w-[38px] text-center whitespace-nowrap" title="등록 사이트에서 이벤트 내용(이름, 날짜, 시간) 가져오기">수집</th>
                       {/* 9. 수정 */}
                       <th className="py-2.5 px-1 w-[34px] text-center whitespace-nowrap">수정</th>
                       {/* 10. 폐기 */}
                       <th className="py-2.5 px-1 w-[34px] text-center whitespace-nowrap">폐기</th>
                       {/* 11. Active */}
-                      <th className="py-2.5 px-1.5 w-[48px] text-center whitespace-nowrap">Active</th>
+                      <th className="py-2.5 px-1.5 w-[48px] text-center whitespace-nowrap">활성</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {sortedChannels.length === 0 ? (
                       <tr>
-                        <td colSpan={11} className="py-8 text-center text-gray-400 text-xs">
+                        <td colSpan={13} className="py-8 text-center text-gray-400 text-xs">
                           등록되거나 검색된 사이트가 없습니다.
                         </td>
                       </tr>
@@ -3118,10 +3126,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                             </td>
 
                             {/* 4. 채널이름 */}
-                            <td className="py-2.5 px-2 truncate max-w-[170px]">
+                            <td className="py-2.5 px-2 truncate max-w-[119px]">
                               <div className="truncate font-bold text-gray-900" title={ch.name}>
                                 {ch.name}
                               </div>
+                            </td>
+
+                            {/* One native radio group per site; unset legacy preferences mean Month. */}
+                            <td className="py-2.5 px-0.5 text-center">
+                              <input type="radio" name={'event-window-' + ch.id} value="month"
+                                aria-label={ch.name + ' Month'} title="Today through one calendar month"
+                                checked={ch.eventWindow !== 'year'}
+                                disabled={crawlerRunning || isExtractingSiteEvents}
+                                onChange={() => updateCrawlingChannel(ch.id, { eventWindow: 'month' })}
+                                className="h-4 w-4 align-middle accent-red-600 cursor-pointer disabled:cursor-wait" />
+                            </td>
+                            <td className="py-2.5 px-0.5 text-center">
+                              <input type="radio" name={'event-window-' + ch.id} value="year"
+                                aria-label={ch.name + ' Year'} title="Today through one calendar year"
+                                checked={ch.eventWindow === 'year'}
+                                disabled={crawlerRunning || isExtractingSiteEvents}
+                                onChange={() => updateCrawlingChannel(ch.id, { eventWindow: 'year' })}
+                                className="h-4 w-4 align-middle accent-red-600 cursor-pointer disabled:cursor-wait" />
                             </td>
 
                             {/* 5. 사이트 주소 */}
@@ -3145,7 +3171,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                               {ch.lastCrawledAt ? (
                                 <span title={formatDateTimeToCST(ch.lastCrawledAt)}>{formatDateToCST(ch.lastCrawledAt)}</span>
                               ) : (
-                                <span className="text-gray-400 font-sans">미실행</span>
+                                <span className="text-gray-400 font-sans">{displayText("미실행")}</span>
                               )}
                             </td>
 
@@ -3218,7 +3244,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
               <div className="p-3 rounded-xl bg-blue-50 border border-blue-200 text-blue-950 text-[11px] leading-relaxed flex items-start gap-2">
                 <AlertCircle className="w-4 h-4 text-blue-700 shrink-0 mt-0.5" />
                 <div>
-                  <strong>이벤트 내용 가져오기 조건:</strong> 관리자가 등록한 <strong>공식 웹사이트/블로그(서브 사이트 자동 탐색 포함)</strong> 및 페이스북 커뮤니티에서 조회되는 다가오는 행사(개최 예정 행사)의 <strong>이벤트 제목, 일정, 비용(가장 높은 옵션의 금액을 "~$000" 양식으로 표시)</strong> 데이터를 가져와 <strong>승인대상 목록 (PENDING)</strong>으로 자동 등록합니다. 수집된 이벤트는 상단 <strong>[이벤트 관리 &gt; PENDING]</strong> 탭에서 관리자가 검토 후 승인(APPROVE) 또는 반려하실 수 있습니다.
+                  <strong>{displayText("이벤트 내용 가져오기 조건:")}</strong>{displayText("관리자가 등록한")}<strong>{displayText("공식 웹사이트/블로그(서브 사이트 자동 탐색 포함)")}</strong>{displayText("및 페이스북 커뮤니티에서 조회되는 다가오는 행사(개최 예정 행사)의")}<strong>{displayText("이벤트 제목, 일정, 비용(가장 높은 옵션의 금액을 \"~$000\" 양식으로 표시)")}</strong>{displayText("데이터를 가져와")}<strong>{displayText("승인대상 목록 (PENDING)")}</strong>{displayText("으로 자동 등록합니다. 수집된 이벤트는 상단")}<strong>{displayText("[이벤트 관리 &gt; PENDING]")}</strong> 탭에서 관리자가 검토 후 승인(APPROVE) 또는 반려하실 수 있습니다.
                 </div>
               </div>
             </div>
@@ -3227,7 +3253,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
             <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-t border-gray-100">
               <div className="text-xs text-gray-500 space-y-0.5 font-mono">
                 <p>Last run: <strong className="text-gray-800 font-semibold">{cronConfig.lastRunAt ? formatDateTimeToCST(cronConfig.lastRunAt) : 'None'}</strong></p>
-                <p>Next scheduled: <strong className="text-gray-800 font-semibold">{cronConfig.nextRunAt ? formatDateTimeToCST(cronConfig.nextRunAt) : formatDateTimeToCST('2026-09-11T06:00:00Z')}</strong> (매주 금요일 01:00 AM CST)</p>
+                <p>Next scheduled: <strong className="text-gray-800 font-semibold">{cronConfig.nextRunAt ? formatDateTimeToCST(cronConfig.nextRunAt) : formatDateTimeToCST('2026-09-11T06:00:00Z')}</strong>{displayText("(매주 금요일 01:00 AM CST)")}</p>
               </div>
 
               <button
@@ -3271,24 +3297,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div className="p-3 rounded-xl bg-green-50 text-green-900 border border-green-200 flex flex-col justify-between">
-                    <span className="font-semibold text-xs text-green-800">승인대상 목록(PENDING) 신규 등록:</span>
+                    <span className="font-semibold text-xs text-green-800">{displayText("승인대상 목록(PENDING) 신규 등록:")}</span>
                     <div className="mt-1 flex items-baseline gap-2">
                       <strong className="text-2xl font-black text-green-700">+{crawlerResult.addedCount}</strong>
-                      <span className="text-xs text-green-700 font-medium">건 (주소 검증 완료)</span>
+                      <span className="text-xs text-green-700 font-medium">{displayText("건 (주소 검증 완료)")}</span>
                     </div>
                   </div>
                   <div className="p-3 rounded-xl bg-rose-50 text-rose-900 border border-rose-200 flex flex-col justify-between">
-                    <span className="font-semibold text-xs text-rose-800">사이트 주소 무효 / 종료 행사 제외:</span>
+                    <span className="font-semibold text-xs text-rose-800">{displayText("사이트 주소 무효 / 종료 행사 제외:")}</span>
                     <div className="mt-1 flex items-baseline gap-2">
                       <strong className="text-2xl font-black text-rose-700">{crawlerResult.invalidUrlCount || 0}</strong>
-                      <span className="text-xs text-rose-700 font-medium">건 제외 (행사 미확인)</span>
+                      <span className="text-xs text-rose-700 font-medium">{displayText("건 제외 (행사 미확인)")}</span>
                     </div>
                   </div>
                   <div className="p-3 rounded-xl bg-amber-50 text-amber-900 border border-amber-200 flex flex-col justify-between">
-                    <span className="font-semibold text-xs text-amber-800">중복 필터링 제외:</span>
+                    <span className="font-semibold text-xs text-amber-800">{displayText("중복 필터링 제외:")}</span>
                     <div className="mt-1 flex items-baseline gap-2">
                       <strong className="text-2xl font-black text-amber-700">{crawlerResult.duplicateCount}</strong>
-                      <span className="text-xs text-amber-700 font-medium">건 차단됨</span>
+                      <span className="text-xs text-amber-700 font-medium">{displayText("건 차단됨")}</span>
                     </div>
                   </div>
                 </div>
@@ -3297,7 +3323,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                 {crawlerResult.addedCount > 0 && (
                   <div className="p-3 rounded-xl bg-red-50 border border-red-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="text-red-900 text-xs">
-                      <strong>승인 대기 안내:</strong> 사이트 주소 유효성 검증을 통과한 신규 행사 데이터 {crawlerResult.addedCount}건이 승인 대상 목록에 등록되었습니다.
+                      <strong>{displayText("승인 대기 안내:")}</strong> 사이트 주소 유효성 검증을 통과한 신규 행사 데이터 {crawlerResult.addedCount}건이 승인 대상 목록에 등록되었습니다.
                     </div>
                     <button
                       onClick={() => {
@@ -3306,7 +3332,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                       }}
                       className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-bold text-xs shadow-xs transition-colors flex items-center justify-center gap-1.5 shrink-0 cursor-pointer"
                     >
-                      <span>승인대상 목록 검토하기 (Go to Pending)</span>
+                      <span>{displayText("승인대상 목록 검토하기 (Go to Pending)")}</span>
                       <ArrowRight className="w-3.5 h-3.5" />
                     </button>
                   </div>
@@ -3329,7 +3355,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
 
                 {crawlerResult.duplicatesDetails && crawlerResult.duplicatesDetails.length > 0 && (
                   <div className="space-y-1 pt-1">
-                    <p className="font-semibold text-gray-700 text-[11px]">중복 및 필터링 상세 로그:</p>
+                    <p className="font-semibold text-gray-700 text-[11px]">{displayText("중복 및 필터링 상세 로그:")}</p>
                     <div className="max-h-28 overflow-y-auto space-y-1 p-2.5 rounded-lg bg-gray-50 border border-gray-200 font-mono text-[10px] text-gray-600">
                       {crawlerResult.duplicatesDetails.map((line, idx) => (
                         <div key={idx} className="truncate">{line}</div>
@@ -3344,7 +3370,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
 
           {/* Past Execution History Table (Single screen table-fixed without horizontal scroll) */}
           <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-xs space-y-4">
-            <h4 className="font-extrabold text-base text-gray-900">사이트 이벤트 가져오기 실행 이력 (Execution History)</h4>
+            <h4 className="font-extrabold text-base text-gray-900">{displayText("사이트 이벤트 가져오기 실행 이력 (Execution History)")}</h4>
             <div className="w-full overflow-hidden">
               <table className="w-full table-fixed text-left text-xs text-gray-700 border-collapse">
                 <thead>
@@ -3501,7 +3527,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                       className="px-3 py-1.5 rounded-lg bg-green-600 hover:bg-green-700 text-white text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
                     >
                       <Check className="w-3.5 h-3.5" />
-                      <span>Apply Curated Notice (자동 반영)</span>
+                      <span>{displayText("Apply Curated Notice (자동 반영)")}</span>
                     </button>
                   )}
                 </div>
@@ -3514,7 +3540,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                   <div className="p-3 rounded-lg bg-white border border-purple-200 text-xs space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="font-bold text-purple-800">📋 Proposed Site Configuration:</span>
-                      <span className="text-[10px] text-purple-600 font-medium">※ Curated Notice만 자동 반영되며, Top Announcement와 Hero Headline은 수동 관리 설정에 따라 보존됩니다.</span>
+                      <span className="text-[10px] text-purple-600 font-medium">{displayText("※ Curated Notice만 자동 반영되며, Top Announcement와 Hero Headline은 수동 관리 설정에 따라 보존됩니다.")}</span>
                     </div>
                     <pre className="p-2 rounded bg-gray-50 border border-gray-200 font-mono text-[11px] text-gray-700 overflow-x-auto">
                       {JSON.stringify(geminiSuggestedConfig, null, 2)}
@@ -3531,10 +3557,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
               <div>
                 <h4 className="font-bold text-base text-gray-900 flex items-center gap-2">
                   <span>Live Site Configuration State</span>
-                  <span className="text-[11px] font-normal text-gray-500">(실시간 사이트 설정 관리)</span>
+                  <span className="text-[11px] font-normal text-gray-500">{displayText("(실시간 사이트 설정 관리)")}</span>
                 </h4>
                 <p className="text-xs text-gray-500 mt-0.5">
-                  <strong className="text-amber-800">Top Announcement</strong>와 <strong className="text-amber-800">Main Hero Headline</strong>은 관리자 <strong className="text-amber-700">수동 업데이트</strong> 항목이며, <strong className="text-purple-700">Curated Notice</strong>는 시스템 및 AI에 의해 <strong className="text-purple-700">자동 업데이트</strong>됩니다.
+                  <strong className="text-amber-800">Top Announcement</strong>{displayText("와")}<strong className="text-amber-800">Main Hero Headline</strong>{displayText("은 관리자")}<strong className="text-amber-700">{displayText("수동 업데이트")}</strong>{displayText("항목이며,")}<strong className="text-purple-700">Curated Notice</strong>{displayText("는 시스템 및 AI에 의해")}<strong className="text-purple-700">{displayText("자동 업데이트")}</strong>됩니다.
                 </p>
               </div>
               <div className="flex flex-col items-start sm:items-end text-[11px] text-gray-500 font-mono shrink-0">
@@ -3551,8 +3577,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
             <div className="space-y-3">
               <div className="flex items-center gap-2 text-xs text-gray-700 font-bold">
                 <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-                <span>수동 업데이트 영역 (Manual Management Only)</span>
-                <span className="text-[11px] font-normal text-gray-400">— 관리자가 직접 입력하여 수정하며, AI나 자동 프로세스에 의해 임의로 변경되지 않습니다.</span>
+                <span>{displayText("수동 업데이트 영역 (Manual Management Only)")}</span>
+                <span className="text-[11px] font-normal text-gray-400">{displayText("— 관리자가 직접 입력하여 수정하며, AI나 자동 프로세스에 의해 임의로 변경되지 않습니다.")}</span>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
@@ -3656,7 +3682,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
               <div className="flex items-center justify-between">
                 <label className="font-bold text-gray-900 flex items-center gap-1.5">
                   <Camera className="w-3.5 h-3.5 text-gray-600" />
-                  <span>Hero Banner Background Image (상단 히어로 배경 사진 설정)</span>
+                  <span>{displayText("Hero Banner Background Image (상단 히어로 배경 사진 설정)")}</span>
                 </label>
                 {siteConfig.heroBackgroundImage && (
                   <button
@@ -3696,7 +3722,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                   className="px-3 py-1.5 rounded-lg bg-white border border-gray-300 hover:border-gray-400 text-gray-700 font-medium text-xs cursor-pointer shadow-2xs inline-flex items-center gap-1.5 transition-colors"
                 >
                   <Camera className="w-3.5 h-3.5 text-gray-500" />
-                  <span>실제 사진 파일 선택 (Screenshot / IMG_2077 등)</span>
+                  <span>{displayText("실제 사진 파일 선택 (Screenshot / IMG_2077 등)")}</span>
                 </label>
                 <span className="text-[11px] text-gray-500">
                   {siteConfig.heroBackgroundImage ? '✓ 사용자 직접 업로드 사진이 적용되어 있습니다' : '기본 밀롱가 홀 배경이 설정되어 있습니다'}
@@ -3713,7 +3739,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                   onChange={(e) => updateSiteConfig({ announcementEnabled: e.target.checked })}
                   className="rounded text-red-600"
                 />
-                <span>Enable Top Announcement Bar (상단 공지 배너 활성화)</span>
+                <span>{displayText("Enable Top Announcement Bar (상단 공지 배너 활성화)")}</span>
               </label>
 
               <span className="text-[11px] text-green-700 bg-green-50 px-2 py-0.5 rounded font-semibold border border-green-200">
@@ -3785,30 +3811,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="block font-bold text-gray-700">플랫폼 / 사이트 유형</label>
+                  <label className="block font-bold text-gray-700">{displayText("플랫폼 / 사이트 유형")}</label>
                   <select
                     value={channelForm.sourceType}
                     onChange={(e) => setChannelForm({ ...channelForm, sourceType: e.target.value as any })}
                     className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-semibold text-gray-800 focus:bg-white focus:border-red-600 focus:outline-none"
                   >
-                    <option value="FACEBOOK">Facebook 커뮤니티/그룹</option>
-                    <option value="PORTAL">전문 탱고 포털 (Tangopolix 등)</option>
-                    <option value="CALENDAR">캘린더 / 마라톤 레지스트리</option>
-                    <option value="COMMUNITY">지역 동호회 / 카페</option>
-                    <option value="WEBSITE">공식 웹사이트 / 블로그</option>
-                    <option value="INSTAGRAM">Instagram 피드</option>
-                    <option value="OTHER">기타 소셜 / 웹</option>
+                    <option value="FACEBOOK">{displayText("Facebook 커뮤니티/그룹")}</option>
+                    <option value="PORTAL">{displayText("전문 탱고 포털 (Tangopolix 등)")}</option>
+                    <option value="CALENDAR">{displayText("캘린더 / 마라톤 레지스트리")}</option>
+                    <option value="COMMUNITY">{displayText("지역 동호회 / 카페")}</option>
+                    <option value="WEBSITE">{displayText("공식 웹사이트 / 블로그")}</option>
+                    <option value="INSTAGRAM">{displayText("Instagram 피드")}</option>
+                    <option value="OTHER">{displayText("기타 소셜 / 웹")}</option>
                   </select>
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block font-bold text-gray-700">대상 국가 코드</label>
+                  <label className="block font-bold text-gray-700">{displayText("대상 국가 코드")}</label>
                   <select
                     value={channelForm.country_code}
                     onChange={(e) => setChannelForm({ ...channelForm, country_code: e.target.value.toUpperCase() })}
                     className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-semibold text-gray-800 focus:bg-white focus:border-red-600 focus:outline-none"
                   >
-                    <option value="ALL">ALL (전체 국가 / 글로벌)</option>
+                    <option value="ALL">{displayText("ALL (전체 국가 / 글로벌)")}</option>
                     {COUNTRY_LIST.map((c) => (
                       <option key={c.code} value={c.code}>
                         {c.name}
@@ -3827,7 +3853,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="block font-bold text-gray-700">대상 도시 (City)</label>
+                  <label className="block font-bold text-gray-700">{displayText("대상 도시 (City)")}</label>
                   <input
                     type="text"
                     placeholder="예: Atlanta, Birmingham, Seoul, Global"
@@ -3873,7 +3899,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block font-bold text-gray-700">주 / 지역 (State / Province)</label>
+                  <label className="block font-bold text-gray-700">{displayText("주 / 지역 (State / Province)")}</label>
                   <input
                     type="text"
                     placeholder="예: GA, AL, Seoul"
@@ -3885,7 +3911,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
               </div>
 
               <div className="space-y-1">
-                <label className="block font-bold text-gray-700">사이트 설명 및 수집 메모</label>
+                <label className="block font-bold text-gray-700">{displayText("사이트 설명 및 수집 메모")}</label>
                 <textarea
                   rows={2}
                   placeholder="예: 주말 정기 밀롱가 및 페스티벌 행사 공지 정기 수집"
@@ -3903,7 +3929,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                     onChange={(e) => setChannelForm({ ...channelForm, enabled: e.target.checked })}
                     className="rounded text-red-600"
                   />
-                  <span>사이트 활성화 (Active)</span>
+                  <span>{displayText("사이트 활성화 (Active)")}</span>
                 </label>
               </div>
 
@@ -3941,8 +3967,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                   <UserPlus className="w-4 h-4" />
                 </div>
                 <div>
-                  <h3 className="font-extrabold text-sm text-gray-900">새 사용자 등록 (Add New User)</h3>
-                  <p className="text-[11px] text-gray-500">관리자 권한으로 시스템에 새로운 사용자 계정을 생성합니다.</p>
+                  <h3 className="font-extrabold text-sm text-gray-900">{displayText("새 사용자 등록 (Add New User)")}</h3>
+                  <p className="text-[11px] text-gray-500">{displayText("관리자 권한으로 시스템에 새로운 사용자 계정을 생성합니다.")}</p>
                 </div>
               </div>
               <button
@@ -3976,7 +4002,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                     onChange={(e) => setAddUserForm({ ...addUserForm, username: e.target.value.replace(/\s+/g, '') })}
                     className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-red-600 focus:outline-none"
                   />
-                  <p className="text-[10px] text-gray-400">공백 없이 영문/숫자 3자 이상</p>
+                  <p className="text-[10px] text-gray-400">{displayText("공백 없이 영문/숫자 3자 이상")}</p>
                 </div>
 
                 <div className="space-y-1">
@@ -3991,7 +4017,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                     onChange={(e) => setAddUserForm({ ...addUserForm, email: e.target.value.trim() })}
                     className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-red-600 focus:outline-none"
                   />
-                  <p className="text-[10px] text-gray-400">로그인 및 알림 수신에 사용됩니다</p>
+                  <p className="text-[10px] text-gray-400">{displayText("로그인 및 알림 수신에 사용됩니다")}</p>
                 </div>
               </div>
 
@@ -4008,7 +4034,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                     onChange={(e) => setAddUserForm({ ...addUserForm, password: e.target.value })}
                     className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-red-600 focus:outline-none"
                   />
-                  <p className="text-[10px] text-gray-400">등록 후 사용자가 재설정 가능합니다</p>
+                  <p className="text-[10px] text-gray-400">{displayText("등록 후 사용자가 재설정 가능합니다")}</p>
                 </div>
 
                 <div className="space-y-1">
@@ -4020,16 +4046,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                     onChange={(e) => setAddUserForm({ ...addUserForm, role: e.target.value as UserRole })}
                     className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-900 focus:bg-white focus:border-red-600 focus:outline-none"
                   >
-                    <option value="USER">일반 사용자 (USER)</option>
-                    <option value="ADMIN">시스템 관리자 (ADMIN)</option>
+                    <option value="USER">{displayText("일반 사용자 (USER)")}</option>
+                    <option value="ADMIN">{displayText("시스템 관리자 (ADMIN)")}</option>
                   </select>
-                  <p className="text-[10px] text-gray-400">관리자 대시보드 접근 권한 여부</p>
+                  <p className="text-[10px] text-gray-400">{displayText("관리자 대시보드 접근 권한 여부")}</p>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
                 <div className="space-y-1">
-                  <label className="block font-bold text-gray-700">국가 (Country)</label>
+                  <label className="block font-bold text-gray-700">{displayText("국가 (Country)")}</label>
                   <select
                     value={addUserForm.country_code}
                     onChange={(e) => setAddUserForm({ ...addUserForm, country_code: e.target.value })}
@@ -4044,7 +4070,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block font-bold text-gray-700">도시 (City)</label>
+                  <label className="block font-bold text-gray-700">{displayText("도시 (City)")}</label>
                   <input
                     type="text"
                     placeholder="예: Seoul, Buenos Aires"
@@ -4055,7 +4081,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block font-bold text-gray-700">연락처 (Phone)</label>
+                  <label className="block font-bold text-gray-700">{displayText("연락처 (Phone)")}</label>
                   <input
                     type="text"
                     placeholder="예: +82 10-1234-5678"
@@ -4084,12 +4110,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                   {addUserLoading ? (
                     <>
                       <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>생성 중...</span>
+                      <span>{displayText("생성 중...")}</span>
                     </>
                   ) : (
                     <>
                       <UserPlus className="w-3.5 h-3.5" />
-                      <span>사용자 생성 (Save)</span>
+                      <span>{displayText("사용자 생성 (Save)")}</span>
                     </>
                   )}
                 </button>
@@ -4228,7 +4254,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                 <span className="font-mono font-bold text-blue-700">{approvalEmailSuccessModal.recipientEmail}</span>
                 
                 <span className="text-gray-500 font-semibold">Language:</span>
-                <span className="font-medium text-gray-800">English (영문 회신 메일)</span>
+                <span className="font-medium text-gray-800">{displayText("English (영문 회신 메일)")}</span>
 
                 <span className="text-gray-500 font-semibold">Subject:</span>
                 <span className="font-medium text-gray-800">

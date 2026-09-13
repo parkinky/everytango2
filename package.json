@@ -25,7 +25,9 @@
     "react-dom": "^19.0.1",
     "undici": "^8.10.2",
     "vite": "^6.2.3",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "puppeteer-core": "25.10.0",
+    "@sparticuz/chromium": "153.0.0"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

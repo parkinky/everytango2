@@ -33,7 +33,7 @@ export function exportEventsToExcel(events: TangoEvent[], customFileName?: strin
         'State': ev.state || '',
         'Location': addrInfo.locationLine,
         'Price (USD)': usdInfo.usdFormatted,
-        'Original Price': usdInfo.originalFormatted || ev.price,
+        'Original Price': usdInfo.usdFormatted === 'N/S' ? 'N/S' : (usdInfo.originalFormatted || ev.price || ''),
         'Free': ev.is_free ? 'Yes' : 'No',
         'Source URL': ev.source_url,
         'Source Type': ev.source_type === 'AUTO_CRAWLED' ? 'Auto Crawled' : 'Manual',
@@ -119,7 +119,7 @@ export function exportEventsToCSV(events: TangoEvent[], customFileName?: string)
         `"${(ev.city || '').replace(/"/g, '""')}"`,
         `"${(ev.state || '').replace(/"/g, '""')}"`,
         `"${usd.usdFormatted}"`,
-        `"${(usd.originalFormatted || ev.price || '').replace(/"/g, '""')}"`,
+        `"${(usd.usdFormatted === 'N/S' ? 'N/S' : (usd.originalFormatted || ev.price || '')).replace(/"/g, '""')}"`,
         `"${(ev.source_url || '').replace(/"/g, '""')}"`,
         `"${(ev.notes || '').replace(/"/g, '""')}"`
       ].join(',');

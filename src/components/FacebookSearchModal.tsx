@@ -28,7 +28,7 @@ import {
   parseFacebookPostText 
 } from '../data/facebookCommunities';
 import { isDuplicateEvent, formatDateRange } from '../utils/dedup';
-import { formatDateToCST } from '../utils/formatters';
+import { formatDateToCST, getDisplayPrice } from '../utils/formatters';
 import { resolveDirectSourceUrl } from '../utils/sourceUrlResolver';
 import { translateEventNotes } from '../utils/notesTranslator';
 
@@ -235,7 +235,7 @@ export const FacebookSearchModal: React.FC<FacebookSearchModalProps> = ({
         city: extractedDraft.city || 'Seoul',
         state: extractedDraft.state || '',
         address: extractedDraft.address || '홍대 탱고 스튜디오',
-        price: extractedDraft.price || '₩15,000',
+        price: extractedDraft.price || 'N/S',
         is_free: Boolean(extractedDraft.is_free),
         source_url: extractedDraft.source_url || 'https://facebook.com',
         notes: extractedDraft.notes || '[Facebook Post Extracted]',
@@ -662,7 +662,7 @@ export const FacebookSearchModal: React.FC<FacebookSearchModalProps> = ({
                     </div>
                     <div>
                       <span className="text-stone-400 block text-[10px]">입장료:</span>
-                      <span className="font-bold text-emerald-600 dark:text-emerald-400">{extractedDraft.price}</span>
+                      <span className="font-bold text-emerald-600 dark:text-emerald-400">{getDisplayPrice(extractedDraft.price, extractedDraft.is_free)}</span>
                     </div>
                   </div>
 
@@ -790,7 +790,7 @@ export const FacebookSearchModal: React.FC<FacebookSearchModalProps> = ({
 
                           <span className="flex items-center gap-1 font-semibold text-emerald-600 dark:text-emerald-400">
                             <DollarSign className="w-3.5 h-3.5" />
-                            {ev.price}
+                            {getDisplayPrice(ev.price, ev.is_free)}
                           </span>
 
                           <span className="flex items-center gap-1 font-mono text-[11px] text-stone-500 dark:text-stone-400" title="검색된 일자">

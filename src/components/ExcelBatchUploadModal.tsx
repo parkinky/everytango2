@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { TangoEvent, EventType, SupportedLanguage } from '../types';
 import { useEvents } from '../context/EventsContext';
+import { isPriceMissing, getDisplayPrice } from '../utils/formatters';
 
 interface ParsedExcelEvent {
   start_date: string;
@@ -439,8 +440,8 @@ export const ExcelBatchUploadModal: React.FC<ExcelBatchUploadModalProps> = ({
           const category = normalizeCategory(rawCategory);
           const rawPriceStr = String(rawPrice || '').trim();
 
-          const isFree = !rawPriceStr || rawPriceStr === '0' || rawPriceStr.toLowerCase().includes('free') || rawPriceStr.includes('무료');
-          const price = isFree ? 'Free' : rawPriceStr;
+          const isFree = Boolean(rawPriceStr && (rawPriceStr === '0' || rawPriceStr.toLowerCase().includes('free') || rawPriceStr.includes('무료') || rawPriceStr.toLowerCase() === 'gratis'));
+          const price = isFree ? 'Free' : (isPriceMissing(rawPriceStr) ? 'N/S' : rawPriceStr);
 
           let sourceUrl = String(rawUrl || '').trim();
           if (sourceUrl && !/^https?:\/\//i.test(sourceUrl)) {
@@ -818,7 +819,9 @@ export const ExcelBatchUploadModal: React.FC<ExcelBatchUploadModalProps> = ({
                           {row.is_free ? (
                             <span className="text-emerald-700 font-bold">Free</span>
                           ) : (
-                            row.price
+                            <span className={isPriceMissing(row.price) ? 'text-gray-400 font-medium font-mono' : ''}>
+                              {getDisplayPrice(row.price)}
+                            </span>
                           )}
                         </td>
                         <td className="px-3 py-2 text-blue-600 truncate max-w-[200px]" title={row.source_url}>

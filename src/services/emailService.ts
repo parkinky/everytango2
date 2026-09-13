@@ -40,7 +40,7 @@ EVENT SUMMARY
 • Dates      : ${dateRange}
 • Location   : ${locationStr}
 • Venue      : ${event.address}
-• Admission  : ${event.price || 'Free'}
+• Admission  : ${event.is_free ? 'Free' : (!event.price || event.price === '미확인' || event.price === 'N/S' ? 'N/S' : event.price)}
 • Website    : ${event.source_url || 'N/A'}
 • Status     : APPROVED & PUBLISHED (Immediate Live Visibility)
 

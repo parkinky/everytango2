@@ -66,6 +66,7 @@ export interface CrawlingChannel {
   id: string;
   name: string;
   url: string;
+  eventWindow?: 'month' | 'year'; // Missing legacy values default to Month.
   sourceType: 'FACEBOOK' | 'PORTAL' | 'CALENDAR' | 'WEBSITE' | 'COMMUNITY' | 'INSTAGRAM' | 'OTHER';
   city?: string;
   state?: string;
@@ -147,3 +148,25 @@ export interface EventExperience {
 }
 
 export type SupportedLanguage = 'en' | 'ko' | 'es' | 'ja' | 'zh';
+
+export type CrawlPeriod = 'month' | 'year';
+export interface CrawlDateWindow { startDate: string; endDate: string; period: CrawlPeriod; timeZone: string; }
+
+// Calendar-month/year windows, inclusive of both endpoints. Clamp month-end/leap days.
+export function getCrawlDateWindow(period: CrawlPeriod = 'month', now: Date = new Date(), timeZone = 'America/Chicago'): CrawlDateWindow {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now);
+  const part = (name: string) => Number(parts.find(p => p.type === name)?.value);
+  const year = part('year'), month = part('month'), day = part('day');
+  const start = new Date(Date.UTC(year, month - 1, day));
+  const target = new Date(Date.UTC(year, month - 1 + (period === 'year' ? 12 : 1), 1));
+  const lastDay = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+  target.setUTCDate(Math.min(day, lastDay));
+  return { startDate: start.toISOString().slice(0, 10), endDate: target.toISOString().slice(0, 10), period, timeZone };
+}
+
+export function isInCrawlDateWindow(startDate: string, endDate: string | undefined, window: CrawlDateWindow): boolean {
+  const valid = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+    Number.isFinite(Date.parse(value + 'T00:00:00Z')) && new Date(value + 'T00:00:00Z').toISOString().slice(0, 10) === value;
+  const end = endDate || startDate;
+  return valid(startDate) && valid(end) && end >= startDate && startDate <= window.endDate && end >= window.startDate;
+}

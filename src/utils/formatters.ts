@@ -7,10 +7,65 @@ export interface TwoLineAddress {
 }
 
 export interface ConvertedPrice {
-  usdFormatted: string;      // e.g. "$133 USD" or "Free ($0)"
-  originalFormatted: string; // e.g. "₩180,000"
+  usdFormatted: string;      // e.g. "$133 USD" or "Free ($0)" or "N/S"
+  originalFormatted: string; // e.g. "₩180,000" or ""
   approxUsd: number;         // e.g. 133
   isFree: boolean;
+  isNotSpecified?: boolean;
+}
+
+/**
+ * Checks if price information is missing, not entered, empty, or unspecified (N/S).
+ */
+export function isPriceMissing(rawPrice: string | undefined | null, isFreeInput?: boolean): boolean {
+  if (isFreeInput) return false;
+  if (!rawPrice) return true;
+  const s = rawPrice.trim().toLowerCase();
+  if (!s) return true;
+  if (
+    s === 'n/s' ||
+    s === 'ns' ||
+    s === 'n/a' ||
+    s === 'na' ||
+    s === '미확인' ||
+    s === '미표기' ||
+    s === '미정' ||
+    s === 'tbd' ||
+    s === 'tba' ||
+    s === 'unknown' ||
+    s === 'not specified' ||
+    s === 'unspecified' ||
+    s === '-' ||
+    s === '–' ||
+    s === '—' ||
+    s === 'none' ||
+    s === 'null' ||
+    s === 'undefined'
+  ) {
+    return true;
+  }
+  // If there are no numbers and contains missing/unspecified keywords
+  if (!/\d/.test(s) && (
+    s.includes('미확인') ||
+    s.includes('미표기') ||
+    s.includes('미정') ||
+    s.includes('not specified') ||
+    s.includes('unspecified') ||
+    s.includes('tbd') ||
+    s.includes('tba')
+  )) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Returns clean display price string or "N/S" when missing/not entered.
+ */
+export function getDisplayPrice(rawPrice: string | undefined | null, isFree?: boolean): string {
+  if (isFree) return 'Free';
+  if (isPriceMissing(rawPrice, isFree)) return 'N/S';
+  return (rawPrice || '').trim();
 }
 
 // Format address cleanly into 2 lines to save horizontal table space
@@ -100,17 +155,30 @@ export function convertPriceToUSD(
   const freeText = FREE_LABELS[lang] || FREE_LABELS.en;
   const donationText = DONATION_LABELS[lang] || DONATION_LABELS.en;
 
-  if (!rawPrice || isFreeInput) {
+  // 1. Check if price is missing or not entered
+  if (isPriceMissing(rawPrice, isFreeInput)) {
+    return {
+      usdFormatted: 'N/S',
+      originalFormatted: '',
+      approxUsd: 0,
+      isFree: false,
+      isNotSpecified: true,
+    };
+  }
+
+  // 2. Explicitly marked free
+  if (isFreeInput) {
     return {
       usdFormatted: freeText,
       originalFormatted: 'Free',
       approxUsd: 0,
       isFree: true,
+      isNotSpecified: false,
     };
   }
 
   const isJapan = countryCode?.toUpperCase() === 'JP';
-  let str = rawPrice.trim();
+  let str = (rawPrice || '').trim();
 
   // Auto-correct legacy crawler euro price bug for Japan events (€15 -> ¥2,500, €30 -> ¥5,000)
   if (isJapan && (str === '€15' || str === '€30' || str.startsWith('€'))) {
@@ -126,6 +194,7 @@ export function convertPriceToUSD(
       originalFormatted: str,
       approxUsd: 0,
       isFree: true,
+      isNotSpecified: false,
     };
   }
 
@@ -136,6 +205,7 @@ export function convertPriceToUSD(
       originalFormatted: str,
       approxUsd: 0,
       isFree: false,
+      isNotSpecified: false,
     };
   }
 
@@ -186,10 +256,11 @@ export function convertPriceToUSD(
 
   if (!numbers || numbers.length === 0) {
     return {
-      usdFormatted: str,
-      originalFormatted: str,
+      usdFormatted: 'N/S',
+      originalFormatted: '',
       approxUsd: 0,
       isFree: false,
+      isNotSpecified: true,
     };
   }
 

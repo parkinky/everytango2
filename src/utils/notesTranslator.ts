@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { SupportedLanguage } from '../types';
 
 /**
@@ -1217,4 +1218,80 @@ export function translateEventNotes(
   // Fallback: apply general phrase and date/time translation
   const translated = translatePhrasesInText(translateDateTimeInText(trimmed, lang), lang);
   return translated;
+}
+
+// Translate only the display text. Never replace persisted source event data.
+const EN_EVENT_TERMS: Record<string, string> = {
+  '춘천 국제탱고 페스티벌': 'Chuncheon International Tango Festival',
+  '제1회 마산 가고파 국화 탱고 마라톤': '1st Masan Gagopa Chrysanthemum Tango Marathon',
+  '2027 서울 땅고 페스티발': '2027 Seoul Tango Festival',
+  '춘천 봄내체육관': 'Bomnae Gymnasium, Chuncheon',
+  '순천시 서면 청소년 수련원': 'Youth Training Center, Seo-myeon, Suncheon',
+  'PISTA서울 홍대': 'PISTA, Hongdae, Seoul',
+  '데땅고부산 부산': 'De Tango, Busan',
+  'Tango club Mi Noche마산 창원 진주 창원': 'Tango club Mi Noche, Masan / Changwon / Jinju / Changwon',
+  'Tango NOW 원문 확인': 'Verified against Tango NOW',
+  '원문 분류:': 'Source category:', '시간 미확인.': 'Time not specified.',
+  '비용 미확인.': 'Price not specified.', '미표기': 'Not specified', '미확인': 'Not specified',
+  '춘천': 'Chuncheon', '순천': 'Suncheon', '서울': 'Seoul', '홍대': 'Hongdae',
+  '강남': 'Gangnam', '부산': 'Busan', '창원': 'Changwon', '마산': 'Masan', '진주': 'Jinju',
+  '승인': 'Approve', '반려': 'Reject', '재승인': 'Approve again',
+  '사이트 이벤트 가져오기 (Cron)': 'Import site events (Cron)',
+  '사이트 이벤트 내용 가져오기': 'Import site events', '사이트 이벤트 내용 지금 가져오기': 'Import site events now',
+  '+ 사이트 추가': '+ Add site', '사이트 이름': 'Site name', '사이트 주소': 'Site URL',
+  '사용자 추가': 'Add user', '수정': 'Edit', '무효 URL': 'Invalid URL', '정상': 'Valid',
+  'URL 검사': 'Check URLs', '주소 검사 중...': 'Checking URLs...',
+};
+const enDisplayCache = new Map<string, string>();
+const enDisplayRequests = new Map<string, Promise<void>>();
+function englishEventText(value: string): string {
+  if (EN_EVENT_TERMS[value]) return EN_EVENT_TERMS[value];
+  let text = translateEventNotes(value, 'en');
+  for (const key of Object.keys(EN_EVENT_TERMS).sort((a, b) => b.length - a.length)) {
+    // Single action labels must not change words embedded in descriptions.
+    if (['승인', '반려', '재승인', '수정', '정상'].includes(key)) continue;
+    text = text.split(key).join(EN_EVENT_TERMS[key]);
+  }
+  return text;
+}
+export function useEventDisplayText(lang: SupportedLanguage, values: Array<string | undefined | null>) {
+  const [, refresh] = useState(0);
+  const missing = Array.from(new Set(values.filter((v): v is string => typeof v === 'string' && !!v)))
+    .filter(v => /[가-힣]/.test(englishEventText(v)) && !enDisplayCache.has(v));
+  const requestKey = lang === 'en' ? JSON.stringify(missing) : '[]';
+  useEffect(() => {
+    if (lang !== 'en' || requestKey === '[]') return;
+    let active = true;
+    const texts: string[] = JSON.parse(requestKey);
+    let request = enDisplayRequests.get(requestKey);
+    if (!request) {
+      request = (async () => {
+        for (let i = 0; i < texts.length; i += 20) {
+          const batch = texts.slice(i, i + 20);
+          const response = await fetch('/api/events/translate-display', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ texts: batch }), signal: AbortSignal.timeout(30000)
+          });
+          const data = await response.json();
+          if (!response.ok || !data.success || !Array.isArray(data.translations) || data.translations.length !== batch.length) {
+            throw new Error(data.error || 'Event translation unavailable');
+          }
+          batch.forEach((original, index) => {
+            const translated = data.translations[index];
+            if (typeof translated === 'string' && translated.trim() && !/[가-힣]/.test(translated)) enDisplayCache.set(original, translated);
+          });
+        }
+      })();
+      enDisplayRequests.set(requestKey, request);
+    }
+    request.then(() => { if (active) refresh(n => n + 1); }).catch(error => {
+      console.warn('[Event display translation]', error.message);
+    });
+    return () => { active = false; };
+  }, [lang, requestKey]);
+  return (value: string | undefined | null): string => {
+    if (!value) return '';
+    if (lang !== 'en') return value;
+    return enDisplayCache.get(value) || englishEventText(value);
+  };
 }

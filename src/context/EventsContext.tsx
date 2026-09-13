@@ -14,7 +14,7 @@ import {
   limit,
 } from 'firebase/firestore';
 import { db, auth } from '../firebase';
-import { TangoEvent, EventFilterState, EventType, EventStatus, CrawlingChannel } from '../types';
+import { TangoEvent, EventFilterState, EventType, EventStatus, CrawlingChannel, getCrawlDateWindow, isInCrawlDateWindow } from '../types';
 import { INITIAL_EVENTS } from '../initialData';
 import { isDuplicateEvent } from '../utils/dedup';
 import { formatDateToCST, formatCrawledDate, getTodayCSTIsoDate, normalizeDateToIso } from '../utils/formatters';
@@ -364,10 +364,10 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
         // Price filter (Free vs Paid)
         if (filters.price_filter === 'free') {
-          const isFree = ev.is_free || ev.price.toLowerCase().includes('free') || ev.price === '0';
+          const isFree = ev.is_free || (ev.price || '').toLowerCase().includes('free') || ev.price === '0';
           if (!isFree) return false;
         } else if (filters.price_filter === 'paid') {
-          const isFree = ev.is_free || ev.price.toLowerCase().includes('free') || ev.price === '0';
+          const isFree = ev.is_free || (ev.price || '').toLowerCase().includes('free') || ev.price === '0';
           if (isFree) return false;
         }
 
@@ -729,10 +729,12 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     // Determine target crawling channels and maintain full list of channels
     let allChannelsList: CrawlingChannel[] = [];
+    let crawlTimeZone = 'America/Chicago';
     try {
       const saved = localStorage.getItem('everytango_cron_config');
       if (saved) {
         const parsed = JSON.parse(saved);
+        if (typeof parsed.timezone === 'string') crawlTimeZone = parsed.timezone;
         if (parsed.channels && Array.isArray(parsed.channels)) {
           allChannelsList = parsed.channels;
         }
@@ -773,20 +775,26 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
     // 2. 크롤링 조건: 오늘 날짜(CST 기준) 이후 개최되는 Upcoming Events(예정된 행사)만 수집
     const now = new Date();
-    const todayIsoStr = getTodayCSTIsoDate(); // Standard ISO "YYYY-MM-DD" e.g. "2026-09-07"
+    const todayIsoStr = getCrawlDateWindow('month', now, crawlTimeZone).startDate;
     const todayDisplayStr = formatDateToCST(now); // "YYYY-MM-DD" for display
-    const timeWindowDesc = `페이스북/웹사이트 Upcoming Events (개최일: ${todayDisplayStr} 이후 예정된 행사)`;
+    const timeWindowDesc = targetChannelsToCrawl.map(channel => {
+      const window = getCrawlDateWindow(channel.eventWindow === 'year' ? 'year' : 'month', now, crawlTimeZone);
+      return channel.name + ' [' + (window.period === 'year' ? 'Year' : 'Month') + ']: ' + window.startDate + ' ~ ' + window.endDate;
+    }).join('; ') + ' (' + crawlTimeZone + ')';
 
     // 3. 관리자가 등록한 사이트에 접근하여 다가오는 이벤트 내용(이벤트 이름, 날짜, 시간) 추출
     const candidatesPool: TangoEvent[] = [];
+    const extractionErrors: string[] = [];
 
     for (const channel of targetChannelsToCrawl) {
+      const channelWindow = getCrawlDateWindow(channel.eventWindow === 'year' ? 'year' : 'month', now, crawlTimeZone);
       const chUrl = (channel.url || '').toLowerCase().trim();
       const chName = (channel.name || '').toLowerCase().trim();
       const chCity = (channel.city || '').toLowerCase().trim();
 
       // Step A: First attempt to extract visible events directly from registered site URL via backend site extractor
       let extractedFromSite: any[] = [];
+      let rangeWasAppliedByServer = false;
       try {
         const resp = await fetch('/api/crawler/extract-site-events', {
           method: 'POST',
@@ -795,19 +803,22 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             url: channel.url,
             channelName: channel.name,
             sourceType: channel.sourceType,
-            city: channel.city || 'Roswell',
-            state: channel.state || 'GA',
+            city: channel.city || '',
+            state: channel.state || '',
             countryCode: channel.country_code || 'US',
+            eventWindow: channelWindow.period,
+            timeZone: crawlTimeZone,
           }),
         });
-        if (resp.ok) {
-          const data = await resp.json();
-          if (data.events && Array.isArray(data.events)) {
-            extractedFromSite = data.events;
-          }
+        const data = await resp.json();
+        if (!resp.ok || data.success === false || !Array.isArray(data.events)) {
+          throw new Error(data.error || data.message || ('HTTP ' + resp.status));
         }
-      } catch (err) {
-        console.warn(`[Site Extractor] Failed to extract from site for ${channel.name}:`, err);
+        extractedFromSite = data.events;
+        rangeWasAppliedByServer = Boolean(data.dateWindow);
+      } catch (err: any) {
+        extractionErrors.push(channel.name + ': ' + (err.message || String(err)));
+        continue;
       }
 
       if (extractedFromSite.length > 0) {
@@ -815,11 +826,7 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           const eventStartDate = normalizeDateToIso(ext.startDate || ext.start_date);
           const eventEndDate = normalizeDateToIso(ext.endDate || ext.end_date) || eventStartDate;
 
-          // 오늘(CST) 이후 예정된 다가오는 이벤트만 수집 (과거 행사 제외)
-          if (!eventStartDate || (eventEndDate < todayIsoStr && eventStartDate < todayIsoStr)) {
-            continue;
-          }
-
+          if (!isInCrawlDateWindow(eventStartDate, eventEndDate, channelWindow)) continue;
           const eventTitle = ext.eventName || ext.event_name;
           const alreadyInPool = candidatesPool.some(
             (c) =>
@@ -828,7 +835,7 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           );
           if (alreadyInPool) continue;
 
-          const determinedPrice = ext.price || (ext.eventType === 'FESTIVAL' ? '~$240' : '~$25');
+          const determinedPrice = (!ext.price || ext.price === '미확인' || ext.price === 'N/S') ? 'N/S' : ext.price;
 
           candidatesPool.push({
             id: 'site_ext_' + Math.random().toString(36).substring(2, 9),
@@ -836,10 +843,10 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             event_type: (ext.eventType || ext.event_type || 'MILONGA') as EventType,
             start_date: eventStartDate,
             end_date: eventEndDate,
-            city: ext.city || channel.city || 'Roswell',
-            state: ext.state || channel.state || 'GA',
+            city: ext.city ?? channel.city ?? '',
+            state: ext.state ?? channel.state ?? '',
             country_code: ext.countryCode || channel.country_code || 'US',
-            address: ext.address || 'Ballroom Impact, 1425 Market Blvd, Suite 525, Roswell, GA 30076',
+            address: ext.address || '',
             price: determinedPrice,
             is_free: ext.isFree || determinedPrice === 'Free' || determinedPrice === '~$0',
             source_url: ext.sourceUrl || channel.url,
@@ -848,10 +855,10 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             submitted_by: `Site Extractor (${channel.name})`,
             submitted_by_name: channel.name,
             created_at: now.toISOString(),
-            notes: ext.notes || `[등록 사이트(${channel.name}) 내용 추출 | 최고가 옵션: ${determinedPrice} | 일시: ${ext.rawDateStr || eventStartDate} ${ext.timeStr || ''}]`,
+            notes: ext.notes || `[등록 사이트(${channel.name}) 내용 추출 | 비용: ${determinedPrice} | 일시: ${ext.rawDateStr || eventStartDate} ${ext.timeStr || ''}]`,
           });
         }
-      } else {
+      } else if (!rangeWasAppliedByServer) {
         // Step B: Fallback to community directory matching if site extractor returned 0
         // Priority 1: Match by group handle or exact URL
         let matchedComms = FACEBOOK_TANGO_COMMUNITIES.filter((fbComm) => {
@@ -880,7 +887,7 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             const eventStartDate = normalizeDateToIso(fbEvt.start_date);
             const eventEndDate = normalizeDateToIso(fbEvt.end_date || fbEvt.start_date);
 
-            if (!eventStartDate || (eventEndDate < todayIsoStr && eventStartDate < todayIsoStr)) {
+            if (!isInCrawlDateWindow(eventStartDate, eventEndDate, channelWindow)) {
               continue;
             }
 
@@ -918,6 +925,8 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         }
       }
     }
+
+    if (extractionErrors.length) throw new Error(extractionErrors.join('\n'));
 
     // 2. 관리자가 등록한 페이스북 페이지 주소에서 Upcoming Event 수집 (오늘 이후 예정된 행사)
     const validUpcomingCandidates = candidatesPool.filter((candidate) => {
@@ -994,7 +1003,8 @@ export const EventsProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       }
 
       // 2. Ensure candidate has authentic venue and clean metadata
-      const { event: cleanCandidate } = repairAndNormalizeEvent(candidate);
+      const cleanCandidate = candidate.source_url.startsWith('https://ktnow.kr/event/')
+        ? candidate : repairAndNormalizeEvent(candidate).event;
       const dupResult = isDuplicateEvent(cleanCandidate, [...events, ...newEventsToAdd]);
       if (dupResult.isDup) {
         duplicateCount++;

@@ -17,6 +17,7 @@ import {
 import { TangoEvent, EventType, EventStatus, CrawlingChannel } from '../types';
 import { useEvents } from '../context/EventsContext';
 import { isDuplicateEvent } from '../utils/dedup';
+import { isPriceMissing } from '../utils/formatters';
 import { auth } from '../firebase';
 
 // This modal is an admin-only tool and the endpoint it calls makes the
@@ -254,7 +255,7 @@ export const SiteEventExtractorModal: React.FC<SiteEventExtractorModalProps> = (
       const item = extractedList[idx];
       if (!item) continue;
 
-      const determinedPrice = item.price || (item.eventType === 'FESTIVAL' ? '~$240' : '~$25');
+      const determinedPrice = isPriceMissing(item.price) ? 'N/S' : item.price;
 
       const eventData: Omit<TangoEvent, 'id' | 'created_at'> = {
         event_name: item.eventName,
@@ -492,7 +493,7 @@ Buddy Dale Diego Stotts님이 공유함
               <div className="divide-y divide-gray-100 max-h-[380px] overflow-y-auto">
                 {extractedList.map((item, idx) => {
                   const isSelected = selectedIndices.includes(idx);
-                  const displayPrice = item.price || (item.eventType === 'FESTIVAL' ? '~$240' : '~$25');
+                  const displayPrice = isPriceMissing(item.price) ? 'N/S' : item.price;
                   const dupCheck = isDuplicateEvent(
                     {
                       event_name: item.eventName,

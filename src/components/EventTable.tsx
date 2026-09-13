@@ -19,7 +19,7 @@ import { TangoEvent, SupportedLanguage, EventType } from '../types';
 import { translations } from '../i18n';
 import { formatDateRange, formatTwoLineDate } from '../utils/dedup';
 import { formatTwoLineAddress, convertPriceToUSD, formatCrawledDate } from '../utils/formatters';
-import { translateEventNotes } from '../utils/notesTranslator';
+import { translateEventNotes, useEventDisplayText } from '../utils/notesTranslator';
 import { useAuth } from '../context/AuthContext';
 import { EventSourceLink } from './EventSourceLink';
 
@@ -33,6 +33,7 @@ const ITEMS_PER_PAGE = 10;
 
 export const EventTable: React.FC<EventTableProps> = ({ events, currentLang, onEditEvent }) => {
   const t = translations[currentLang];
+  const displayText = useEventDisplayText(currentLang, events.flatMap(ev => [ev.event_name, ev.city, ev.state, ev.address, ev.price, ev.notes]));
   const { userProfile, currentUser } = useAuth();
   const isAdmin = Boolean(
     userProfile?.role === 'ADMIN' || 
@@ -175,7 +176,10 @@ export const EventTable: React.FC<EventTableProps> = ({ events, currentLang, onE
 
   const copyEventShare = (ev: TangoEvent) => {
     const usd = convertPriceToUSD(ev.price, ev.is_free, ev.country_code, currentLang);
-    const text = `${ev.event_name} (${ev.city}, ${ev.country_code}) - ${formatDateRange(ev.start_date, ev.end_date, currentLang)}\n${t.table.price}: ${usd.usdFormatted} (${usd.originalFormatted || ev.price})${ev.source_url ? `\n${ev.source_url}` : ''}`;
+    const priceDisplay = usd.usdFormatted === 'N/S'
+      ? 'N/S'
+      : `${displayText(usd.usdFormatted)}${usd.originalFormatted && usd.originalFormatted !== usd.usdFormatted ? ` (${usd.originalFormatted})` : ''}`;
+    const text = `${displayText(ev.event_name)} (${ev.city}, ${ev.country_code}) - ${formatDateRange(ev.start_date, ev.end_date, currentLang)}\n${t.table.price}: ${priceDisplay}${ev.source_url ? `\n${ev.source_url}` : ''}`;
     navigator.clipboard.writeText(text);
     setCopiedId(ev.id);
     setTimeout(() => setCopiedId(null), 2000);
@@ -355,7 +359,7 @@ export const EventTable: React.FC<EventTableProps> = ({ events, currentLang, onE
           <tbody className="divide-y divide-gray-100 text-xs text-gray-700">
             {paginatedEvents.map((ev) => {
               const { start, end } = formatTwoLineDate(ev.start_date, ev.end_date, currentLang);
-              const addr = formatTwoLineAddress(ev);
+              const addr = formatTwoLineAddress({ ...ev, city: displayText(ev.city), state: displayText(ev.state), address: displayText(ev.address) });
               const usd = convertPriceToUSD(ev.price, ev.is_free, ev.country_code, currentLang);
               const crawled = formatCrawledDate(ev.created_at);
 
@@ -383,8 +387,8 @@ export const EventTable: React.FC<EventTableProps> = ({ events, currentLang, onE
                   {/* Event Name */}
                   <td className="py-2.5 px-3 align-middle">
                     <div className="flex items-center gap-1.5">
-                      <span className="font-bold text-gray-900 group-hover:text-red-600 transition-colors truncate block" title={ev.event_name}>
-                        {ev.event_name}
+                      <span className="font-bold text-gray-900 group-hover:text-red-600 transition-colors truncate block" title={displayText(ev.event_name)}>
+                        {displayText(ev.event_name)}
                       </span>
                       {ev.source_type === 'AUTO_CRAWLED' && (
                         <span title={t.table.botTooltip} className="shrink-0 text-[10px] bg-gray-100 text-gray-500 px-1 py-0.2 rounded border border-gray-200">
@@ -401,7 +405,7 @@ export const EventTable: React.FC<EventTableProps> = ({ events, currentLang, onE
                       )}
                     </div>
                     {ev.notes && (() => {
-                      const translatedNote = translateEventNotes(ev.notes, currentLang);
+                      const translatedNote = currentLang === 'en' ? displayText(ev.notes) : translateEventNotes(ev.notes, currentLang);
                       return (
                         <p className="text-[11px] text-gray-500 truncate mt-0.5 font-normal" title={translatedNote}>
                           {translatedNote}
@@ -434,12 +438,12 @@ export const EventTable: React.FC<EventTableProps> = ({ events, currentLang, onE
                   {/* Price (USD converted prominently with original currency subtitle) */}
                   <td className="py-2.5 px-1.5 whitespace-nowrap text-right align-middle font-semibold">
                     <div className="leading-tight">
-                      <div className={`font-mono text-xs font-bold ${usd.isFree ? 'text-green-600' : 'text-gray-900'}`}>
-                        {usd.usdFormatted}
+                      <div className={`font-mono text-xs font-bold ${usd.isFree ? 'text-green-600' : usd.usdFormatted === 'N/S' ? 'text-gray-400 font-medium' : 'text-gray-900'}`}>
+                        {displayText(usd.usdFormatted)}
                       </div>
-                      {usd.originalFormatted && usd.originalFormatted !== usd.usdFormatted && (
-                        <div className="text-[10px] text-gray-400 font-normal font-mono" title={`Original: ${usd.originalFormatted}`}>
-                          ({usd.originalFormatted})
+                      {usd.originalFormatted && usd.originalFormatted !== usd.usdFormatted && usd.usdFormatted !== 'N/S' && (
+                        <div className="text-[10px] text-gray-400 font-normal font-mono" title={`Original: ${displayText(usd.originalFormatted)}`}>
+                          ({displayText(usd.originalFormatted)})
                         </div>
                       )}
                     </div>
@@ -523,7 +527,7 @@ export const EventTable: React.FC<EventTableProps> = ({ events, currentLang, onE
       <div className="sm:hidden space-y-2.5">
         {paginatedEvents.map((ev) => {
           const { start, end } = formatTwoLineDate(ev.start_date, ev.end_date, currentLang);
-          const addr = formatTwoLineAddress(ev);
+          const addr = formatTwoLineAddress({ ...ev, city: displayText(ev.city), state: displayText(ev.state), address: displayText(ev.address) });
           const usd = convertPriceToUSD(ev.price, ev.is_free, ev.country_code, currentLang);
           const crawled = formatCrawledDate(ev.created_at);
 
@@ -540,17 +544,17 @@ export const EventTable: React.FC<EventTableProps> = ({ events, currentLang, onE
                       {ev.country_code}
                     </span>
                   </div>
-                  <h4 className="font-bold text-sm text-gray-900">{ev.event_name}</h4>
+                  <h4 className="font-bold text-sm text-gray-900">{displayText(ev.event_name)}</h4>
                 </div>
 
                 {/* Price in USD on Mobile */}
                 <div className="text-right shrink-0">
-                  <span className={`text-xs font-bold px-2 py-0.5 rounded-md font-mono ${usd.isFree ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-gray-100 text-gray-900'}`}>
-                    {usd.usdFormatted}
+                  <span className={`text-xs font-bold px-2 py-0.5 rounded-md font-mono ${usd.isFree ? 'bg-green-50 text-green-700 border border-green-200' : usd.usdFormatted === 'N/S' ? 'bg-gray-100 text-gray-400 border border-gray-200' : 'bg-gray-100 text-gray-900'}`}>
+                    {displayText(usd.usdFormatted)}
                   </span>
-                  {usd.originalFormatted && usd.originalFormatted !== usd.usdFormatted && (
+                  {usd.originalFormatted && usd.originalFormatted !== usd.usdFormatted && usd.usdFormatted !== 'N/S' && (
                     <div className="text-[10px] text-gray-400 font-mono mt-0.5">
-                      ({usd.originalFormatted})
+                      ({displayText(usd.originalFormatted)})
                     </div>
                   )}
                 </div>
@@ -585,7 +589,7 @@ export const EventTable: React.FC<EventTableProps> = ({ events, currentLang, onE
               </div>
 
               {ev.notes && (() => {
-                const translatedNote = translateEventNotes(ev.notes, currentLang);
+                const translatedNote = currentLang === 'en' ? displayText(ev.notes) : translateEventNotes(ev.notes, currentLang);
                 return (
                   <p className="text-xs text-gray-600 bg-gray-50 p-2 rounded-lg border border-gray-100" title={translatedNote}>
                     {translatedNote}
