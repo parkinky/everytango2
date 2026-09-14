@@ -62,17 +62,17 @@ function MainAppContent() {
       >
         {/* Left: Login status (Guest / Logged-in user or admin) */}
         <div className="flex items-center gap-1.5 shrink-0 z-10 max-w-[200px] xs:max-w-[240px] sm:max-w-xs md:max-w-sm truncate text-red-100">
-          {currentUser ? (
+          {(userProfile || currentUser) ? (
             <span 
               className="truncate flex items-center gap-1.5 text-xs font-medium" 
-              title={`[${isAdmin ? 'ADMIN' : 'USER'}] ID: ${userProfile?.username || userProfile?.id || currentUser.uid} · ${userProfile?.email || currentUser.email}`}
+                            title={`[${isAdmin ? 'ADMIN' : 'USER'}] ID: ${userProfile?.username || userProfile?.id || currentUser?.uid} · ${userProfile?.email || currentUser?.email}`}
             >
               <span className={`w-1.5 h-1.5 rounded-full ${isAdmin ? 'bg-amber-400' : 'bg-emerald-400'} shrink-0`} />
               <span className="font-bold text-[10px] sm:text-[11px] px-1.5 py-0.5 rounded bg-black/25 text-white/90 shrink-0">
                 {isAdmin ? 'ADMIN' : 'USER'}
               </span>
               <span className="truncate text-red-100">
-                ID: {userProfile?.username || userProfile?.id || currentUser.uid} · {userProfile?.email || currentUser.email}
+                                ID: {userProfile?.username || userProfile?.id || currentUser?.uid} · {userProfile?.email || currentUser?.email}
               </span>
             </span>
           ) : (
