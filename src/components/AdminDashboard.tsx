@@ -255,6 +255,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
   });
   const [isFacebookModalOpen, setIsFacebookModalOpen] = useState(false);
   const [isExtractorModalOpen, setIsExtractorModalOpen] = useState(false);
+  const [extractorInitialError, setExtractorInitialError] = useState('');
   const [extractorTargetChannel, setExtractorTargetChannel] = useState<CrawlingChannel | null>(null);
 
   // --- GEMINI TAB & CURATED NOTICE AUTO STATE ---
@@ -858,7 +859,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
       addCronLog({ id: 'cron_' + Date.now(), timestamp: new Date().toISOString(), status: 'FAILED',
         itemsDiscovered: 0, itemsAdded: 0, duplicatesBlocked: 0, durationMs: Date.now() - startTime,
         message: '[사이트 수집 실패] ' + (err?.message || String(err)) });
-      alert(`사이트 이벤트 내용 가져오기 중 오류가 발생했습니다: ${err?.message || String(err)}`);
+      const failedChannel = targetChannel || (targetChannels.length === 1 ? targetChannels[0] : null);
+      if (failedChannel && /facebook\.com/i.test(failedChannel.url)) {
+        setExtractorInitialError(err?.message || String(err));
+        setExtractorTargetChannel(failedChannel);
+        setIsExtractorModalOpen(true);
+      } else {
+        alert(`사이트 이벤트 내용 가져오기 중 오류가 발생했습니다: ${err?.message || String(err)}`);
+      }
     } finally {
       setIsExtractingSiteEvents(false);
       setExtractingSiteChannelId(null);
@@ -1403,8 +1411,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
               : 'bg-white text-gray-600 hover:text-gray-900 border border-gray-200'
           }`}
         >
-          <Sparkles className="w-4 h-4 text-purple-600" />
-          <span>Gemini AI Manager</span>
+          <span>Header Manager</span>
         </button>
       </div>
 
@@ -1681,8 +1688,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
 
                           {/* Location & Address in 2 lines */}
                           <td className="py-2.5 px-2 leading-tight align-middle">
-                            <div className="font-semibold text-gray-900 truncate" title={addr.locationLine}>
-                              {addr.locationLine}
+                            <div className="font-semibold text-gray-900 truncate flex items-center gap-1.5" title={addr.locationLine}>
+                              <span className="px-1.5 py-0.2 rounded bg-gray-100 text-gray-800 text-[10px] font-bold border border-gray-200 shrink-0 whitespace-nowrap">
+                                {addr.countryName || ev.country_code}
+                              </span>
+                              <span className="truncate">
+                                {addr.cityState || ev.city}
+                              </span>
                             </div>
                             <div className="text-[10px] text-gray-500 truncate" title={addr.venueLine}>
                               {addr.venueLine}
@@ -3191,6 +3203,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
                               >
                                 <Download className={`w-3.5 h-3.5 ${extractingSiteChannelId === ch.id ? 'animate-spin text-indigo-700' : ''}`} />
                               </button>
+                              <button type="button" title={ch.name + ' 화면 내용 붙여넣기'}
+                                disabled={crawlerRunning || isExtractingSiteEvents}
+                                onClick={() => { setExtractorTargetChannel(ch); setExtractorInitialError('행사 날짜 다음 줄에 제목이 오도록 Facebook 화면 내용을 붙여넣으세요.'); setIsExtractorModalOpen(true); }}
+                                className="px-1.5 py-1 rounded text-xs text-indigo-700 hover:bg-indigo-50 disabled:opacity-40">본문</button>
                             </td>
 
                             {/* 9. 수정 버튼 */}
@@ -4300,6 +4316,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentLang, onR
           setExtractorTargetChannel(null);
         }}
         channel={extractorTargetChannel}
+        initialError={extractorInitialError}
+        timeZone={cronConfig.timezone}
         onSuccess={(addedCount) => {
           alert(`성공: 사이트에서 ${addedCount}건의 예정된 이벤트를 [승인대상 목록(PENDING)]으로 가져왔습니다.`);
         }}

@@ -11,7 +11,7 @@ import { ExperiencesProvider } from './context/ExperiencesContext';
 import { SiteConfigProvider, useSiteConfig } from './context/SiteConfigContext';
 import { SupportedLanguage } from './types';
 import { translations } from './i18n';
-import { Compass, Sparkles, Megaphone, ShieldCheck, LogOut } from 'lucide-react';
+import { Compass, Megaphone, ShieldCheck, LogOut, UserPlus } from 'lucide-react';
 import { TangoMilongaHallSilhouette } from './components/TangoMilongaHallSilhouette';
 
 function MainAppContent() {
@@ -21,6 +21,9 @@ function MainAppContent() {
   // Auth modal state
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<'signin' | 'register' | 'findId' | 'findPw'>('signin');
+  
+  // Guest ID Registration hover tooltip position
+  const [guestRegTooltipPos, setGuestRegTooltipPos] = useState<{ x: number; y: number } | null>(null);
   
   // Admin Exit Confirmation Modal state
   const [showAdminExitModal, setShowAdminExitModal] = useState(false);
@@ -61,22 +64,39 @@ function MainAppContent() {
         className="w-full bg-red-900 text-white text-[11px] sm:text-xs py-1.5 px-3 sm:px-4 border-b border-red-800 transition-all shadow-xs relative flex items-center justify-between min-h-[34px] gap-2 sm:gap-4"
       >
         {/* Left: Login status (Guest / Logged-in user or admin) */}
-        <div className="flex items-center gap-1.5 shrink-0 z-10 max-w-[200px] xs:max-w-[240px] sm:max-w-xs md:max-w-sm truncate text-red-100">
+        <div className="flex items-center gap-2 shrink-0 z-20 text-red-100">
           {(userProfile || currentUser) ? (
             <span 
-              className="truncate flex items-center gap-1.5 text-xs font-medium" 
-                            title={`[${isAdmin ? 'ADMIN' : 'USER'}] ID: ${userProfile?.username || userProfile?.id || currentUser?.uid} · ${userProfile?.email || currentUser?.email}`}
+              className="truncate flex items-center gap-1.5 text-xs font-medium max-w-[200px] xs:max-w-[240px] sm:max-w-xs md:max-w-sm" 
+              title={`[${isAdmin ? 'ADMIN' : 'USER'}] ID: ${userProfile?.username || userProfile?.id || currentUser?.uid} · ${userProfile?.email || currentUser?.email}`}
             >
               <span className={`w-1.5 h-1.5 rounded-full ${isAdmin ? 'bg-amber-400' : 'bg-emerald-400'} shrink-0`} />
               <span className="font-bold text-[10px] sm:text-[11px] px-1.5 py-0.5 rounded bg-black/25 text-white/90 shrink-0">
                 {isAdmin ? 'ADMIN' : 'USER'}
               </span>
               <span className="truncate text-red-100">
-                                ID: {userProfile?.username || userProfile?.id || currentUser?.uid} · {userProfile?.email || currentUser?.email}
+                ID: {userProfile?.username || userProfile?.id || currentUser?.uid} · {userProfile?.email || currentUser?.email}
               </span>
             </span>
           ) : (
-            <span className="text-red-200 font-medium whitespace-nowrap">Guest</span>
+            <div className="flex items-center gap-2">
+              <span className="text-red-200 font-medium whitespace-nowrap">Guest</span>
+              <button
+                id="top-id-registration-btn"
+                type="button"
+                onClick={() => {
+                  setGuestRegTooltipPos(null);
+                  handleOpenAuth('register');
+                }}
+                onMouseEnter={(e) => setGuestRegTooltipPos({ x: e.clientX, y: e.clientY })}
+                onMouseMove={(e) => setGuestRegTooltipPos({ x: e.clientX, y: e.clientY })}
+                onMouseLeave={() => setGuestRegTooltipPos(null)}
+                className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white font-bold text-[11px] sm:text-xs transition-colors shadow-xs cursor-pointer shrink-0 border border-emerald-400/40"
+              >
+                <UserPlus className="w-3 h-3 text-emerald-100" />
+                <span>ID Registration</span>
+              </button>
+            </div>
           )}
         </div>
 
@@ -176,18 +196,14 @@ function MainAppContent() {
                 <div className={`pt-0.5 w-full flex items-center ${siteConfig.curatedNotice ? 'justify-between' : 'justify-start'} gap-2 text-xs`}>
                   {siteConfig.curatedNotice && (
                     <span 
-                      className="inline-flex items-center gap-1.5 py-1 px-2.5 rounded-md bg-gray-50/95 backdrop-blur-xs border border-gray-200 text-gray-700 font-medium text-xs flex-1 min-w-0 truncate"
+                      className="inline-flex items-center py-1 px-2.5 rounded-md bg-gray-50/95 backdrop-blur-xs border border-gray-200 text-gray-700 font-medium text-xs flex-1 min-w-0 truncate"
                       title={siteConfig.curatedNotice}
                     >
-                      <Sparkles className="w-3 h-3 text-purple-600 shrink-0" />
                       <span className="truncate">{siteConfig.curatedNotice}</span>
                     </span>
                   )}
 
                   <div className="flex items-center gap-2 shrink-0">
-                    <span className="py-1 px-2.5 rounded-md bg-gray-50/95 backdrop-blur-xs border border-gray-200 text-gray-700 whitespace-nowrap shrink-0">
-                      <strong className="text-gray-900 font-bold">{stats.totalApproved}</strong> {t.hero.upcomingEvents}
-                    </span>
                     <span className="py-1 px-2.5 rounded-md bg-gray-50/95 backdrop-blur-xs border border-gray-200 text-gray-700 whitespace-nowrap shrink-0">
                       <strong className="text-gray-900 font-bold">20+</strong> {t.hero.countries}
                     </span>
@@ -210,6 +226,7 @@ function MainAppContent() {
               events={filteredEvents} 
               currentLang={currentLang} 
               onEditEvent={handleEditEvent}
+              isAdmin={isAdmin}
             />
 
           </div>
@@ -332,6 +349,19 @@ function MainAppContent() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Floating tooltip for ID Registration button */}
+      {guestRegTooltipPos && (
+        <div 
+          className="fixed z-50 pointer-events-none px-2.5 py-1 text-xs font-semibold text-white bg-gray-950/95 backdrop-blur-xs rounded-md shadow-lg border border-gray-700/80 whitespace-nowrap"
+          style={{ 
+            left: `${guestRegTooltipPos.x + 12}px`, 
+            top: `${guestRegTooltipPos.y + 12}px` 
+          }}
+        >
+          Need ID to register Tango Event
         </div>
       )}
 

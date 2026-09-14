@@ -598,6 +598,12 @@ export function getAuthenticVenueForCity(
  * 4. Fixes incorrect currency formatting (e.g. Japan events mistakenly using Euro)
  */
 export function repairAndNormalizeEvent(ev: TangoEvent): { event: TangoEvent; changed: boolean } {
+  // Preserve observed source fields. Missing data must not become an invented venue or price.
+  if (/^\[(Facebook 공개 행사|사이트 원문 확인)/.test(ev.notes || '')) {
+    const generatedAddress = (ev.city || '').trim() + ' Tango Salon & Cultural Studio, Central Plaza';
+    if (ev.address === generatedAddress) return { event: { ...ev, address: '' }, changed: true };
+    return { event: ev, changed: false };
+  }
   let changed = false;
   let fixedAddress = ev.address;
   let fixedCity = ev.city ? ev.city.trim() : '';

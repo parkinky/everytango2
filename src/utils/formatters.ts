@@ -2,8 +2,95 @@
 import { getAuthenticVenueForCity } from './authenticVenues';
 
 export interface TwoLineAddress {
-  locationLine: string; // Line 1: [KR] Seoul, Gangnam
+  locationLine: string; // Line 1: [United States] Portland, OR
   venueLine: string;    // Line 2: El Tango Studio, Nonhyeon-dong 142-3
+  countryName: string;  // Full country name: e.g. "United States", "South Korea"
+  countryCode: string;  // 2-letter code: e.g. "US", "KR"
+  cityState: string;    // e.g. "Portland, OR"
+}
+
+export const COUNTRY_NAME_MAP: Record<string, string> = {
+  US: 'United States',
+  KR: 'South Korea',
+  AR: 'Argentina',
+  ES: 'Spain',
+  DE: 'Germany',
+  IT: 'Italy',
+  FR: 'France',
+  GB: 'United Kingdom',
+  UK: 'United Kingdom',
+  JP: 'Japan',
+  TR: 'Turkey',
+  GR: 'Greece',
+  PT: 'Portugal',
+  NL: 'Netherlands',
+  CA: 'Canada',
+  AU: 'Australia',
+  BR: 'Brazil',
+  UY: 'Uruguay',
+  PL: 'Poland',
+  AT: 'Austria',
+  CH: 'Switzerland',
+  CN: 'China',
+  TW: 'Taiwan',
+  SG: 'Singapore',
+  SI: 'Slovenia',
+  RO: 'Romania',
+  SE: 'Sweden',
+  FI: 'Finland',
+  NO: 'Norway',
+  DK: 'Denmark',
+  BE: 'Belgium',
+  CZ: 'Czech Republic',
+  HR: 'Croatia',
+  EE: 'Estonia',
+  LV: 'Latvia',
+  LT: 'Lithuania',
+  HU: 'Hungary',
+  IE: 'Ireland',
+  CY: 'Cyprus',
+  MY: 'Malaysia',
+  VN: 'Vietnam',
+  BG: 'Bulgaria',
+  LB: 'Lebanon',
+  RU: 'Russia',
+  IN: 'India',
+  HK: 'Hong Kong',
+  AE: 'United Arab Emirates',
+  UA: 'Ukraine',
+  MD: 'Moldova',
+  IR: 'Iran',
+  ME: 'Montenegro',
+  RS: 'Serbia',
+  ID: 'Indonesia',
+  NZ: 'New Zealand',
+  MX: 'Mexico',
+  CO: 'Colombia',
+  CL: 'Chile',
+  PE: 'Peru',
+  IL: 'Israel',
+  TH: 'Thailand',
+  PH: 'Philippines',
+  ZA: 'South Africa',
+};
+
+export function getFullCountryName(countryCodeOrName: string | undefined | null): string {
+  if (!countryCodeOrName) return '';
+  const trimmed = countryCodeOrName.trim();
+  const upper = trimmed.toUpperCase();
+  if (COUNTRY_NAME_MAP[upper]) {
+    return COUNTRY_NAME_MAP[upper];
+  }
+  if (upper.length === 2) {
+    try {
+      const dn = new Intl.DisplayNames(['en'], { type: 'region' });
+      const name = dn.of(upper);
+      if (name && name !== upper) return name;
+    } catch {
+      // ignore
+    }
+  }
+  return trimmed;
 }
 
 export interface ConvertedPrice {
@@ -94,20 +181,25 @@ export function formatTwoLineAddress(event: {
     address = venue.address;
   }
   
-  // Line 1: Country code badge & City/State
+  // Line 1: Full Country Name badge & City/State
   let locationParts: string[] = [];
   if (city) locationParts.push(city);
   if (state && state.toLowerCase() !== city.toLowerCase()) locationParts.push(state);
   
-  const locationText = locationParts.join(', ') || city || country;
-  const locationLine = country ? `[${country}] ${locationText}` : locationText;
+  const countryName = getFullCountryName(country) || country;
+  const cityState = locationParts.join(', ') || city;
+  const locationText = cityState || countryName;
+  const locationLine = countryName ? `[${countryName}] ${locationText}` : locationText;
 
   // Line 2: Venue name or street address
   const venueLine = address || '—';
 
   return {
     locationLine,
-    venueLine
+    venueLine,
+    countryName,
+    countryCode: country,
+    cityState
   };
 }
 

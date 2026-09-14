@@ -2285,7 +2285,8 @@ function parseVisibleEventsFromText(
   currentYear = new Date().getFullYear()
 ): ExtractedSiteEvent[] {
   const events: ExtractedSiteEvent[] = [];
-  const lines = text
+  const baseYear = currentYear;
+  const lines = normalizeJapaneseEventText(text)
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter(Boolean);
@@ -2300,7 +2301,7 @@ function parseVisibleEventsFromText(
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const explicitYear = line.match(/(?:^|[\s,])(20\d{2})(?:년|\b)/);
-    if (explicitYear) currentYear = Number(explicitYear[1]);
+    currentYear = explicitYear ? Number(explicitYear[1]) : baseYear;
 
     // Pattern 1: Korean date format (e.g. "9월 8일 화 오후 7시 CDT", "10월 9일 금~10월 11일")
     const krMatch = line.match(/(\d{1,2})월\s*(\d{1,2})일/);
@@ -2358,11 +2359,12 @@ function parseVisibleEventsFromText(
         startDate = `${currentYear}-${m}-${d}`;
         endDate = startDate;
 
-        const endKr = line.match(/~\s*(\d{1,2})월?\s*(\d{1,2})일/);
+        const tail = line.slice((krMatch.index || 0) + krMatch[0].length);
+        const endKr = tail.match(/[~–—-]\s*(?:(20\d{2})년\s*)?(?:(\d{1,2})월\s*)?(\d{1,2})일/);
         if (endKr) {
-          const endM = line.includes('~') && line.split('~')[1].includes('월') && endKr[1] ? endKr[1].padStart(2, '0') : m;
-          const endD = endKr[2] ? endKr[2].padStart(2, '0') : endKr[1].padStart(2, '0');
-          endDate = `${currentYear}-${endM}-${endD}`;
+          const endM = (endKr[2] || m).padStart(2, '0');
+          const endYear = endKr[1] ? Number(endKr[1]) : currentYear + (Number(endM) < Number(m) ? 1 : 0);
+          endDate = String(endYear) + '-' + endM + '-' + endKr[3].padStart(2, '0');
         }
 
         const timeMatch = line.match(/(오전|오후)\s*(\d{1,2})(?::(\d{2}))?\s*(?:시)?(?:\s*([A-Z]{2,4}))?/);
@@ -2403,12 +2405,20 @@ function parseVisibleEventsFromText(
         }
       }
 
+      if (!timeStr) {
+        const clock = line.match(/(?:^|[^\d])(\d{1,2}):(\d{2})(?:\s*(JST|UTC|GMT))?/);
+        if (clock && Number(clock[1]) < 24 && Number(clock[2]) < 60) timeStr = clock[1].padStart(2, '0') + ':' + clock[2] + (clock[3] ? ' ' + clock[3] : '');
+      }
+      const validDate = (date: string) => /^\d{4}-\d{2}-\d{2}$/.test(date) && !Number.isNaN(Date.parse(date)) && new Date(date).toISOString().slice(0, 10) === date;
+      if (!validDate(startDate) || !validDate(endDate) || endDate < startDate) continue;
+
       // Check next line(s) for event title
       let title = '';
       let organizer = '';
       for (let j = i + 1; j < Math.min(i + 4, lines.length); j++) {
         const candidateLine = lines[j];
         if (
+          /^(興味あり|参加予定|参加する|招待|シェア|今後のイベント|Interested|Going|Invite|Share|Upcoming events)$/i.test(candidateLine) ||
           candidateLine.includes('관심 있음') ||
           candidateLine.includes('참석함') ||
           candidateLine.includes('초대') ||
@@ -2445,7 +2455,11 @@ function parseVisibleEventsFromText(
 
         // Surrounding lines for pricing analysis
         const surroundingText = lines.slice(Math.max(0, i - 2), Math.min(i + 10, lines.length)).join('\n');
-        const highestPrice = extractHighestPriceOption(surroundingText, eventType, defaultCountry);
+        const yen = Array.from(surroundingText.matchAll(/(?:[¥￥]|JPY\s*)([\d,]+)|([\d,]+)\s*円/g)).map(m => Number((m[1] || m[2]).replace(/,/g, ''))).filter(n => n > 0);
+        const currency = defaultCountry === 'KR' ? '₩' : ['FR','DE','ES','IT','NL','BE','AT','PT','GR','FI'].includes(defaultCountry) ? '€' : '$';
+        const pattern = currency === '₩' ? /(?:₩|KRW\s*)([\d,]+)|([\d,]+)\s*원/g : currency === '€' ? /(?:€|EUR\s*)([\d,]+(?:\.\d{2})?)/g : /(?:\$|USD\s*)([\d,]+(?:\.\d{2})?)/g;
+        const prices = Array.from(surroundingText.matchAll(pattern)).map(m => Number((m[1] || m[2]).replace(/,/g, ''))).filter(n => n >= 0);
+        const highestPrice = yen.length ? '~¥' + Math.max(...yen).toLocaleString('en-US') : prices.length ? '~' + currency + Math.max(...prices).toLocaleString('en-US') : /(?:無料|무료|\bfree\s*(?:entry|admission)\b)/i.test(surroundingText) ? 'Free' : 'N/S';
 
         events.push({
           id: 'ext_' + Math.random().toString(36).substring(2, 9),
@@ -2453,18 +2467,18 @@ function parseVisibleEventsFromText(
           eventType,
           startDate,
           endDate,
-          timeStr: timeStr || '19:30',
-          city: defaultCity || 'Roswell',
-          state: defaultState || 'GA',
+          timeStr,
+          city: defaultCity || '',
+          state: defaultState || '',
           countryCode: defaultCountry || 'US',
-          address: 'Ballroom Impact, 1425 Market Blvd, Suite 525, Roswell, GA 30076',
+          address: '',
           price: highestPrice,
           isFree: highestPrice === 'Free' || highestPrice === '~$0',
           sourceUrl: siteUrl,
           channelName,
           organizer: organizer || channelName,
           rawDateStr: line,
-          notes: `[사이트 내용 추출 | 최고가: ${highestPrice}] ${line} | ${title}`,
+          notes: `[사이트 원문 확인 | 비용: ${highestPrice}] ${line} | ${title}`,
         });
       }
     }
@@ -2587,6 +2601,113 @@ async function renderTangoNowEvents(channelName: string, dateWindow?: CrawlDateW
   try { return await job; } finally { tangoNowCrawlInFlight = undefined; }
 }
 
+
+// Public Facebook extraction. No login cookies, private APIs, or static event catalog.
+function normalizeJapaneseEventText(text: string): string {
+  return text.normalize('NFKC')
+    .replace(/(20\d{2})[\/-](\d{1,2})[\/-](\d{1,2})(?=\D|$)/g, '$1년 $2월 $3일')
+    .replace(/(\d{4})\s*年/g, '$1년 ')
+    .replace(/(\d{1,2})\s*月\s*(\d{1,2})\s*日/g, '$1월 $2일')
+    .replace(/([~〜～–—-])\s*(\d{1,2})\s*日/g, '~ $2일')
+    .replace(/[〜～]/g, '~')
+    .replace(/午前/g, '오전').replace(/午後/g, '오후');
+}
+
+async function renderPublicFacebookEvents(siteUrl: string, channelName: string, city: string, state: string, country: string): Promise<ExtractedSiteEvent[]> {
+  const target = new URL(siteUrl);
+  if (target.protocol !== 'https:' || !['facebook.com', 'www.facebook.com', 'm.facebook.com'].includes(target.hostname) || !(await isSafeExternalUrl(siteUrl))) {
+    throw new Error('FACEBOOK_INVALID_URL: 올바른 Facebook HTTPS 행사/그룹 주소가 필요합니다.');
+  }
+  const { default: puppeteer } = await import('puppeteer-core');
+  const { default: chromium } = await import('@sparticuz/chromium');
+  const browser = await puppeteer.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || await chromium.executablePath(), args: chromium.args, headless: true, timeout: 30000 });
+  const deadline = setTimeout(() => { void browser.close().catch(() => {}); }, 60000);
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 900 });
+    await page.setRequestInterception(true);
+    page.on('request', request => {
+      try {
+        const u = new URL(request.url());
+        const trusted = u.protocol === 'https:' && ['facebook.com', 'fbcdn.net', 'fbsbx.com'].some(h => u.hostname === h || u.hostname.endsWith('.' + h));
+        const main = request.isNavigationRequest() && request.frame() === page.mainFrame();
+        if (!trusted || (main && !['facebook.com', 'www.facebook.com', 'm.facebook.com'].includes(u.hostname))) void request.abort().catch(() => {});
+        else void request.continue().catch(() => {});
+      } catch { void request.abort().catch(() => {}); }
+    });
+    const response = await page.goto(siteUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    if (!response?.ok()) throw new Error('FACEBOOK_HTTP_ERROR: HTTP ' + (response?.status() || '응답 없음'));
+    // Wait for public event content or an explicit access restriction; never submit a login form.
+    await page.waitForFunction(() => {
+      const body = document.body?.innerText || '';
+      return !!document.querySelector('script[type="application/ld+json"], a[href*="/events/"][href*="facebook.com/events/"], input[type="password"]') || /no upcoming events|예정된 이벤트가 없|다가오는 이벤트가 없|予定されているイベントはありません|access denied|temporarily blocked/i.test(body);
+    }, { timeout: 15000 }).catch(() => {});
+    const snapshot = await page.evaluate(() => {
+      const structured: string[] = Array.from(document.querySelectorAll('script[type="application/ld+json"]')).map(el => el.textContent || '');
+      const cards: { title: string; url: string; text: string }[] = [];
+      const seen = new Set<string>();
+      for (const anchor of Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href]'))) {
+        let u: URL;
+        try { u = new URL(anchor.href); } catch { continue; }
+        if (!/(^|\.)facebook\.com$/.test(u.hostname) || !/^\/events\/\d+\/?$/.test(u.pathname)) continue;
+        const title = (anchor.innerText || '').trim();
+        const key = u.origin + u.pathname;
+        if (title.length < 3 || seen.has(key)) continue;
+        let container: HTMLElement | null = anchor;
+        let text = '';
+        for (let depth = 0; container && depth < 7; depth++, container = container.parentElement) {
+          const candidate = container.innerText || '';
+          const eventIds = new Set(Array.from(container.querySelectorAll<HTMLAnchorElement>('a[href]')).map(a => { try { return new URL(a.href).pathname.match(/^\/events\/(\d+)/)?.[1]; } catch { return undefined; } }).filter(Boolean));
+          if (eventIds.size > 1 || candidate.length > 5000) break;
+          text = candidate;
+          if (/\d{1,2}\s*[月월]|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d/i.test(text)) break;
+        }
+        if (text) { cards.push({ title, url: key, text }); seen.add(key); }
+        if (cards.length >= 100) break;
+      }
+      return { structured, cards, text: (document.body?.innerText || '').slice(0, 100000), login: !!document.querySelector('input[type="password"]') };
+    });
+    const result: ExtractedSiteEvent[] = [];
+    const addStructured = (node: any, depth = 0) => {
+      if (!node || typeof node !== 'object' || depth > 12) return;
+      if (Array.isArray(node)) { node.forEach(item => addStructured(item, depth + 1)); return; }
+      const types = Array.isArray(node['@type']) ? node['@type'] : [node['@type']];
+      if (types.includes('Event') && typeof node.name === 'string' && typeof node.startDate === 'string') {
+        const startDate = node.startDate.slice(0, 10);
+        const endDate = typeof node.endDate === 'string' ? node.endDate.slice(0, 10) : startDate;
+        const validDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s)) && new Date(s).toISOString().slice(0, 10) === s;
+        if (validDate(startDate) && validDate(endDate) && endDate >= startDate) {
+          const location = node.location && !Array.isArray(node.location) ? node.location : {};
+          const address = typeof location.address === 'string' ? location.address : [location.address?.streetAddress, location.address?.addressLocality, location.address?.addressRegion, location.address?.postalCode].filter(Boolean).join(', ');
+          let sourceUrl = siteUrl;
+          try { const u = new URL(node.url); if (u.protocol === 'https:' && /(^|\.)facebook\.com$/.test(u.hostname) && /^\/events\/\d+/.test(u.pathname)) sourceUrl = u.origin + u.pathname; } catch {}
+          const label = node.name.toLowerCase();
+          result.push({ eventName: node.name, eventType: /workshop|ワークショップ/.test(label) ? 'WORKSHOP' : /marathon|マラソン/.test(label) ? 'MARATHON' : /festival|フェスティバル/.test(label) ? 'FESTIVAL' : /practica|プラクティカ/.test(label) ? 'PRACTICA' : 'MILONGA', startDate, endDate,
+            timeStr: node.startDate.includes('T') ? node.startDate.slice(11) : '', city: location.address?.addressLocality || city, state: location.address?.addressRegion || state, countryCode: country,
+            address: [location.name, address].filter(Boolean).join(', '), price: 'N/S', isFree: node.isAccessibleForFree === true, sourceUrl, channelName, organizer: node.organizer?.name || channelName,
+            rawDateStr: node.startDate, notes: '[Facebook 공개 행사 원문] 미표기 장소·시간·비용은 추정하지 않았습니다.' });
+        }
+      }
+      Object.values(node).forEach(value => addStructured(value, depth + 1));
+    };
+    for (const json of snapshot.structured) { try { addStructured(JSON.parse(json)); } catch {} }
+    for (const card of snapshot.cards) {
+      const lines = normalizeJapaneseEventText(card.text).split(/\r?\n/).map(line => line.trim());
+      const dateLine = lines.find(line => /\d{1,2}월\s*\d{1,2}일|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d/i.test(line));
+      if (!dateLine) continue;
+      const events = parseVisibleEventsFromText(dateLine + '\n' + card.title, city, state, country, card.url, channelName);
+      for (const event of events) if (!result.some(existing => existing.sourceUrl === card.url)) result.push({ ...event, price: 'N/S', isFree: false, notes: '[Facebook 공개 행사 카드] ' + card.text.slice(0, 1500) });
+    }
+    const unique = result.filter((event, index) => result.findIndex(other => other.sourceUrl === event.sourceUrl && other.eventName === event.eventName && other.startDate === event.startDate) === index);
+    if (unique.length) return unique;
+    if (snapshot.login || /\/login|\/checkpoint/.test(page.url()) || /log in to continue|로그인해야|ログインしてください|temporarily blocked|access denied/i.test(snapshot.text)) {
+      throw new Error('FACEBOOK_ACCESS_REQUIRED: Facebook이 서버에 로그인 또는 접근 확인을 요구했습니다. 브라우저의 로그인은 수집 서버에 전달되지 않습니다. [화면 내용 붙여넣기]로 행사 제목·날짜·장소를 가져오세요.');
+    }
+    if (/no upcoming events|예정된 이벤트가 없|다가오는 이벤트가 없|予定されているイベントはありません/i.test(snapshot.text)) return [];
+    throw new Error('FACEBOOK_NO_READABLE_EVENTS: 공개 화면에서 행사 제목과 날짜를 확인하지 못했습니다. [화면 내용 붙여넣기]로 가져오세요. 실제 행사가 없다는 뜻은 아닙니다.');
+  } finally { clearTimeout(deadline); await browser.close().catch(() => {}); }
+}
+
 // Handler: Extract visible upcoming events from registered site or raw content
 const handleExtractSiteEvents: express.RequestHandler = async (req, res) => {
   try {
@@ -2621,8 +2742,8 @@ const handleExtractSiteEvents: express.RequestHandler = async (req, res) => {
     };
 
     const trimmedUrl = (url || '').trim();
-    const cleanCity = city.trim() || 'Roswell';
-    const cleanState = state.trim() || 'GA';
+    const cleanCity = city.trim();
+    const cleanState = state.trim();
     const cleanCountry = countryCode.trim() || 'US';
     const isOfficialWebsite =
       sourceType === 'WEBSITE' ||
@@ -2702,6 +2823,20 @@ const handleExtractSiteEvents: express.RequestHandler = async (req, res) => {
         count: parsedEvents.length,
         message: `화면 내용 분석 완료: ${parsedEvents.length}건의 이벤트(이름, 날짜, 최고가 옵션 비용)를 추출했습니다.`,
       });
+    }
+
+    // Facebook always uses observed public content, never the legacy fixed catalog.
+    let isFacebook = false;
+    try { isFacebook = /(^|\.)facebook\.com$/.test(new URL(trimmedUrl).hostname); } catch {}
+    if (isFacebook) {
+      try {
+        const events = await renderPublicFacebookEvents(trimmedUrl, channelName, cleanCity, cleanState, cleanCountry);
+        return sendExtractedEvents({ success: true, source: 'FACEBOOK_PUBLIC_RENDERED', events, count: events.length });
+      } catch (error: any) {
+        const detail = error?.message || '공개 화면 렌더링 실패';
+        return sendExtractedEvents({ success: false, source: 'FACEBOOK_FETCH_FAILED', events: [], count: 0,
+          error: detail + ' [화면 내용 붙여넣기]에서 원문을 분석할 수 있습니다.', message: detail, requiresManualContent: true });
+      }
     }
 
     // 2. Official Website / Blog with Sub-Site Search & Highest Option Pricing (~$000)

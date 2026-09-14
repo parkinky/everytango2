@@ -27,15 +27,16 @@ interface EventTableProps {
   events: TangoEvent[];
   currentLang: SupportedLanguage;
   onEditEvent?: (eventId: string) => void;
+  isAdmin?: boolean;
 }
 
 const ITEMS_PER_PAGE = 10;
 
-export const EventTable: React.FC<EventTableProps> = ({ events, currentLang, onEditEvent }) => {
+export const EventTable: React.FC<EventTableProps> = ({ events, currentLang, onEditEvent, isAdmin: propIsAdmin }) => {
   const t = translations[currentLang];
   const displayText = useEventDisplayText(currentLang, events.flatMap(ev => [ev.event_name, ev.city, ev.state, ev.address, ev.price, ev.notes]));
   const { userProfile, currentUser } = useAuth();
-  const isAdmin = Boolean(
+  const isAdmin = propIsAdmin !== undefined ? propIsAdmin : Boolean(
     userProfile?.role === 'ADMIN' || 
     currentUser?.email === 'parkinky@gmail.com' || 
     userProfile?.username === 'parkinky'
@@ -275,14 +276,18 @@ export const EventTable: React.FC<EventTableProps> = ({ events, currentLang, onE
           >
             {t.table.sortByCity} {sortField === 'city' && (sortAsc ? '↑' : '↓')}
           </button>
-          <span>·</span>
-          <button 
-            onClick={() => toggleSort('crawled')} 
-            className={`font-semibold px-1.5 py-0.5 rounded transition-colors ${sortField === 'crawled' ? 'bg-red-50 text-red-600 font-bold' : 'text-gray-600 hover:text-gray-900'}`}
-            title="Sort by Crawled"
-          >
-            {t.table.crawledDate} {sortField === 'crawled' && (sortAsc ? '↑' : '↓')}
-          </button>
+          {isAdmin && (
+            <>
+              <span>·</span>
+              <button 
+                onClick={() => toggleSort('crawled')} 
+                className={`font-semibold px-1.5 py-0.5 rounded transition-colors ${sortField === 'crawled' ? 'bg-red-50 text-red-600 font-bold' : 'text-gray-600 hover:text-gray-900'}`}
+                title="Sort by Crawled"
+              >
+                {t.table.crawledDate} {sortField === 'crawled' && (sortAsc ? '↑' : '↓')}
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -309,10 +314,10 @@ export const EventTable: React.FC<EventTableProps> = ({ events, currentLang, onE
               {/* Event Type (6.5%) */}
               <th className="w-[6.5%] py-2.5 px-1.5 text-center">{t.table.type}</th>
 
-              {/* Event Name (29%): +20%~25% increase */}
+              {/* Event Name (29% when admin, 33.75% when non-admin) */}
               <th 
                 onClick={() => toggleSort('name')}
-                className="w-[29%] py-2.5 px-3 cursor-pointer hover:text-gray-900 transition-colors"
+                className={`${isAdmin ? 'w-[29%]' : 'w-[33.75%]'} py-2.5 px-3 cursor-pointer hover:text-gray-900 transition-colors`}
               >
                 <div className="flex items-center gap-1">
                   <span>{t.table.eventName}</span>
@@ -320,10 +325,10 @@ export const EventTable: React.FC<EventTableProps> = ({ events, currentLang, onE
                 </div>
               </th>
 
-              {/* Location & Address (29%): -20% reduction from 36% */}
+              {/* Location & Address (29% when admin, 33.75% when non-admin) */}
               <th 
                 onClick={() => toggleSort('city')}
-                className="w-[29%] py-2.5 px-3 cursor-pointer hover:text-gray-900 transition-colors"
+                className={`${isAdmin ? 'w-[29%]' : 'w-[33.75%]'} py-2.5 px-3 cursor-pointer hover:text-gray-900 transition-colors`}
               >
                 <div className="flex items-center gap-1">
                   <span>{t.table.locationAndAddress}</span>
@@ -339,17 +344,19 @@ export const EventTable: React.FC<EventTableProps> = ({ events, currentLang, onE
                 </div>
               </th>
 
-              {/* Crawled Date (9.5%) */}
-              <th 
-                onClick={() => toggleSort('crawled')}
-                className="w-[9.5%] py-2.5 px-2 cursor-pointer hover:text-gray-900 transition-colors"
-                title={t.table.crawledDate}
-              >
-                <div className="flex items-center gap-1">
-                  <span>{t.table.crawledDate}</span>
-                  <ArrowUpDown className="w-3 h-3 text-gray-400" />
-                </div>
-              </th>
+              {/* Crawled Date (9.5%) - Only visible for admin */}
+              {isAdmin && (
+                <th 
+                  onClick={() => toggleSort('crawled')}
+                  className="w-[9.5%] py-2.5 px-2 cursor-pointer hover:text-gray-900 transition-colors"
+                  title={t.table.crawledDate}
+                >
+                  <div className="flex items-center gap-1">
+                    <span>{t.table.crawledDate}</span>
+                    <ArrowUpDown className="w-3 h-3 text-gray-400" />
+                  </div>
+                </th>
+              )}
 
               {/* Link / Details (7%) */}
               <th className="w-[7%] py-2.5 px-1.5 text-center">{t.table.details}</th>
@@ -419,11 +426,11 @@ export const EventTable: React.FC<EventTableProps> = ({ events, currentLang, onE
                     <div className="leading-tight">
                       {/* Line 1: Country & City, State */}
                       <div className="text-xs font-semibold text-gray-900 flex items-center gap-1.5 truncate">
-                        <span className="px-1.5 py-0.2 rounded bg-gray-100 text-gray-700 font-mono text-[10px] font-bold border border-gray-200 shrink-0">
-                          {addr.locationLine.startsWith('[') ? addr.locationLine.slice(1, addr.locationLine.indexOf(']')) : ev.country_code}
+                        <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-800 text-[10px] sm:text-[11px] font-bold border border-gray-200 shrink-0 whitespace-nowrap">
+                          {addr.countryName || ev.country_code}
                         </span>
                         <span className="truncate">
-                          {addr.locationLine.includes('] ') ? addr.locationLine.slice(addr.locationLine.indexOf('] ') + 2) : `${ev.city}${ev.state ? `, ${ev.state}` : ''}`}
+                          {addr.cityState || (addr.locationLine.includes('] ') ? addr.locationLine.slice(addr.locationLine.indexOf('] ') + 2) : `${ev.city}${ev.state ? `, ${ev.state}` : ''}`)}
                         </span>
                       </div>
                       
@@ -449,19 +456,21 @@ export const EventTable: React.FC<EventTableProps> = ({ events, currentLang, onE
                     </div>
                   </td>
 
-                  {/* Crawled Date */}
-                  <td className="py-2.5 px-2 whitespace-nowrap font-medium text-gray-700 align-middle">
-                    <div className="flex flex-col font-mono text-[11px] leading-tight">
-                      <span className="text-gray-900 font-semibold truncate" title={crawled.date}>
-                        {crawled.date}
-                      </span>
-                      {crawled.time && (
-                        <span className="text-gray-400 text-[10px] truncate" title={crawled.time}>
-                          {crawled.time}
+                  {/* Crawled Date - Only visible for admin */}
+                  {isAdmin && (
+                    <td className="py-2.5 px-2 whitespace-nowrap font-medium text-gray-700 align-middle">
+                      <div className="flex flex-col font-mono text-[11px] leading-tight">
+                        <span className="text-gray-900 font-semibold truncate" title={crawled.date}>
+                          {crawled.date}
                         </span>
-                      )}
-                    </div>
-                  </td>
+                        {crawled.time && (
+                          <span className="text-gray-400 text-[10px] truncate" title={crawled.time}>
+                            {crawled.time}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                  )}
 
                   {/* Details Link & Share */}
                   <td className="py-2.5 px-1.5 whitespace-nowrap text-center align-middle">
@@ -540,8 +549,8 @@ export const EventTable: React.FC<EventTableProps> = ({ events, currentLang, onE
                 <div>
                   <div className="flex items-center gap-1.5 mb-1">
                     {renderBadge(ev.event_type)}
-                    <span className="px-1.5 py-0.2 rounded bg-gray-100 text-gray-600 font-mono text-[10px] font-bold border border-gray-200">
-                      {ev.country_code}
+                    <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-800 text-[10px] font-bold border border-gray-200 shrink-0 whitespace-nowrap">
+                      {addr.countryName || ev.country_code}
                     </span>
                   </div>
                   <h4 className="font-bold text-sm text-gray-900">{displayText(ev.event_name)}</h4>
@@ -570,11 +579,13 @@ export const EventTable: React.FC<EventTableProps> = ({ events, currentLang, onE
                   </div>
                 </div>
 
-                {/* Crawled Date badge on mobile */}
-                <div className="text-right text-[10px] text-gray-400 font-mono" title={t.table.crawledDate}>
-                  <span>{t.table.crawledDate}: </span>
-                  <span className="font-medium text-gray-600">{crawled.date}</span>
-                </div>
+                {/* Crawled Date badge on mobile - only for admin */}
+                {isAdmin && (
+                  <div className="text-right text-[10px] text-gray-400 font-mono" title={t.table.crawledDate}>
+                    <span>{t.table.crawledDate}: </span>
+                    <span className="font-medium text-gray-600">{crawled.date}</span>
+                  </div>
+                )}
               </div>
 
               {/* Address in 2 Lines */}

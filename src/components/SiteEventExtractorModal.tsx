@@ -24,12 +24,10 @@ import { auth } from '../firebase';
 // server fetch third-party URLs, so it now requires the caller to be a
 // signed-in admin (see requireAdmin in server.ts). Attach the ID token.
 async function adminAuthHeaders(): Promise<Record<string, string>> {
-  try {
-    const idToken = await auth.currentUser?.getIdToken();
-    return idToken ? { Authorization: `Bearer ${idToken}` } : {};
-  } catch {
-    return {};
-  }
+  let token: string | undefined;
+  try { token = await auth.currentUser?.getIdToken(); } catch {}
+  if (!token) { try { token = localStorage.getItem('everytango_session_token') || undefined; } catch {} }
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 interface ExtractedSiteEvent {
@@ -57,6 +55,8 @@ interface SiteEventExtractorModalProps {
   onClose: () => void;
   channel: CrawlingChannel | null;
   onSuccess?: (addedCount: number) => void;
+  initialError?: string;
+  timeZone?: string;
 }
 
 export const SiteEventExtractorModal: React.FC<SiteEventExtractorModalProps> = ({
@@ -64,6 +64,8 @@ export const SiteEventExtractorModal: React.FC<SiteEventExtractorModalProps> = (
   onClose,
   channel,
   onSuccess,
+  initialError = '',
+  timeZone = 'America/Chicago',
 }) => {
   const { events, addEventDirect } = useEvents();
 
@@ -93,10 +95,12 @@ export const SiteEventExtractorModal: React.FC<SiteEventExtractorModalProps> = (
         headers: { 'Content-Type': 'application/json', ...(await adminAuthHeaders()) },
         body: JSON.stringify({
           url: targetChannel.url,
+          eventWindow: targetChannel.eventWindow || 'month',
+          timeZone,
           channelName: targetChannel.name,
           sourceType: targetChannel.sourceType,
-          city: targetChannel.city || 'Roswell',
-          state: targetChannel.state || 'GA',
+          city: targetChannel.city || '',
+          state: targetChannel.state || '',
           countryCode: targetChannel.country_code || 'US',
         }),
       });
@@ -138,8 +142,9 @@ export const SiteEventExtractorModal: React.FC<SiteEventExtractorModalProps> = (
         setSelectedIndices(initialSelected);
         setSuccessMsg(data.message || `${data.events.length}건의 이벤트 내용을 추출했습니다.`);
       } else {
+        if (data.requiresManualContent) setActiveTab('paste');
         setErrorMsg(
-          data.message ||
+          data.error || data.message ||
             '등록된 사이트에서 직접 이벤트를 추출하지 못했습니다. [화면 내용 직접 붙여넣기] 탭에서 화면 텍스트를 붙여넣어주세요.'
         );
       }
@@ -171,10 +176,13 @@ export const SiteEventExtractorModal: React.FC<SiteEventExtractorModalProps> = (
         body: JSON.stringify({
           url: channel?.url || 'https://www.facebook.com/groups/tangobaratlanta/events',
           channelName: channel?.name || 'Tango Bar Atlanta',
-          city: channel?.city || 'Roswell',
-          state: channel?.state || 'GA',
+          city: channel?.city || '',
+          state: channel?.state || '',
           countryCode: channel?.country_code || 'US',
           rawContent: pastedContent,
+          sourceType: channel?.sourceType,
+          eventWindow: channel?.eventWindow || 'month',
+          timeZone,
         }),
       });
 
@@ -207,7 +215,7 @@ export const SiteEventExtractorModal: React.FC<SiteEventExtractorModalProps> = (
         setSelectedIndices(initialSelected);
         setSuccessMsg(`화면 내용 분석 성공: ${data.events.length}건의 이벤트(이름, 날짜, 시간)를 추출했습니다.`);
       } else {
-        setErrorMsg('입력된 내용에서 날짜 및 이벤트 제목을 감지하지 못했습니다. 형식을 확인해주세요.');
+        setErrorMsg(data.error || (data.excludedByWindow ? '선택한 수집 기간 밖의 행사입니다. 사이트의 1개월/1년 설정을 확인해주세요.' : '날짜 및 이벤트 제목을 감지하지 못했습니다. 날짜 다음 줄에 행사 제목이 오도록 붙여넣어주세요.'));
       }
     } catch (err: any) {
       setErrorMsg(`텍스트 분석 오류: ${err.message}`);
@@ -218,10 +226,15 @@ export const SiteEventExtractorModal: React.FC<SiteEventExtractorModalProps> = (
 
   useEffect(() => {
     if (isOpen && channel) {
-      setActiveTab('fetch');
-      fetchFromSite(channel);
+      setPastedContent('');
+      setExtractedList([]);
+      setSelectedIndices([]);
+      setSuccessMsg(null);
+      setErrorMsg(initialError || null);
+      setActiveTab(initialError ? 'paste' : 'fetch');
+      if (!initialError) fetchFromSite(channel);
     }
-  }, [isOpen, channel]);
+  }, [isOpen, channel, initialError]);
 
   if (!isOpen || !channel) return null;
 
@@ -262,10 +275,10 @@ export const SiteEventExtractorModal: React.FC<SiteEventExtractorModalProps> = (
         event_type: item.eventType || 'MILONGA',
         start_date: item.startDate,
         end_date: item.endDate || item.startDate,
-        city: item.city || channel.city || 'Roswell',
-        state: item.state || channel.state || 'GA',
+        city: item.city || channel.city || '',
+        state: item.state || channel.state || '',
         country_code: item.countryCode || channel.country_code || 'US',
-        address: item.address || 'Ballroom Impact, 1425 Market Blvd, Suite 525, Roswell, GA 30076',
+        address: item.address || '',
         price: determinedPrice,
         is_free: item.isFree || determinedPrice === 'Free' || determinedPrice === '~$0',
         source_url: item.sourceUrl || channel.url,
@@ -400,7 +413,7 @@ export const SiteEventExtractorModal: React.FC<SiteEventExtractorModalProps> = (
                 <div>
                   <h4 className="text-xs font-bold text-gray-900">브라우저 열린 화면 텍스트 붙여넣기</h4>
                   <p className="text-[11px] text-gray-500 mt-0.5">
-                    페이스북 등 로그인된 브라우저 창에서 마우스 드래그 또는 전체선택(Ctrl+A) 후 복사(Ctrl+C)한 텍스트를 붙여넣으세요.
+                    Facebook에서 행사 날짜와 제목을 복사해 붙여넣으세요. 날짜 다음 줄에 제목을 넣으면 정확하게 분석할 수 있습니다. 일본어 날짜(2026年9月20日 18:00)도 지원합니다. 확인되지 않은 장소·시간·비용은 추정하지 않습니다.
                   </p>
                 </div>
                 <button
